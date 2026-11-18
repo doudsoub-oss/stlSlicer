@@ -1,2 +1,68 @@
-# stlSlicer
-python script that big stl files into multiple tinier files.
+# stlsplit
+
+Split an STL model that is too big for your printer into pieces that each fit the build volume,
+with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
+assembly map telling you which piece goes where.
+
+> **Status:** under development (Phase 0 of PLAN.md). Nothing below the install section works
+> yet; sections marked TODO are filled in as the features land.
+
+```bash
+stlsplit model.stl -o ./out --bed 220 220 250
+```
+
+## Install
+
+Requires Python 3.12 or newer.
+
+```bash
+git clone git@github.com:doudsoub-oss/stlSlicer.git
+cd stlSlicer
+pip install -e .
+stlsplit --version
+```
+
+Optional, GPL-licensed repair fallback for badly broken meshes: `pip install -e ".[deep-repair]"`.
+
+## Quick start (5 minutes)
+
+TODO (Phase 9): from a model to printed, assembled pieces.
+
+## Examples
+
+TODO (Phase 1): common invocations, a TOML configuration file (docs/CONFIGURATION.md).
+
+## Calibration: choosing your clearance
+
+TODO (Phase 7): `stlsplit --calibrate`, print the kit, pick the clearance that fits.
+
+## The output folder
+
+TODO (Phase 9): `parts/`, `dowels/`, `assembly.json`, `assembly.md`, `preview_exploded.glb`
+(docs/OUTPUT_FORMAT.md).
+
+## Printing the dowels
+
+TODO (Phase 7): orientation (on the flat), quantity per file.
+
+## Assembling
+
+TODO (Phase 9): following `assembly.md`, gluing.
+
+## Known limits
+
+TODO (Phase 11). By design: axis-aligned cuts only, no hollowing, no dovetails or snap-fits
+(PLAN.md §1.5).
+
+## Performance
+
+TODO (Phase 10): measured times.
+
+## Real test print
+
+TODO (Phase 11).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The optional `deep-repair` extra installs pymeshlab, which is
+GPL-3.0.

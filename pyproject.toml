@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stlsplit"
+version = "0.0.0"
+description = "Split oversized STL models into printable, connectable parts."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "gSbr" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+# Minimums are the versions verified by scripts/api_spike.py (docs/LIBRARY_NOTES.md).
+dependencies = [
+    "manifold3d>=3.5.5",
+    "trimesh>=5.2.1",
+    "scipy>=1.18.1",
+    "networkx>=3.7",
+    "shapely>=2.2.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.2",
+    "pytest-cov>=7.1",
+    "hypothesis>=6.170",
+    "jsonschema>=4.26",
+    "ruff>=0.17.5",
+    "mypy>=2.4",
+]
+# GPL-3.0; imported lazily, only with --deep-repair (PLAN.md §2).
+deep-repair = ["pymeshlab"]
+
+[project.scripts]
+stlsplit = "stlsplit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+stlsplit = ["schemas/*.json", "py.typed"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# Markdown code blocks in docs are illustrative (aligned comments); never reformat them.
+extend-exclude = [".venv", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "D"]
+ignore = ["D105", "D107"]
+# The docs and formulas use these symbols on purpose (PLAN.md §6).
+allowed-confusables = ["×", "−", "ε", "π"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"scripts/**" = ["D103"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+# These libraries ship no type information. manifold3d ships manifold3d.pyi without
+# py.typed, which mypy ignores (docs/LIBRARY_NOTES.md).
+module = ["manifold3d", "trimesh.*", "shapely.*", "scipy.*", "networkx.*", "pymeshlab.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--cov=stlsplit", "--cov-report=term-missing:skip-covered"]
+markers = [
+    "e2e: end-to-end tests running the CLI in a subprocess",
+    "slow: performance tests on large models (manual and weekly CI)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["stlsplit"]
