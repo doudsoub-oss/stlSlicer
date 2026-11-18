@@ -71,10 +71,27 @@ python scripts/api_spike.py                 # after any dependency upgrade
 ## Recipes
 
 ### Add a CLI or TOML option
-TODO (Phase 1)
+1. Add the field, with its default and a docstring line, to the table's dataclass in
+   `src/stlsplit/config.py`. The field name is the TOML key.
+2. Add its rules to `config.validate()`, with a message giving the allowed range.
+3. If it has a CLI flag, add it in `cli.build_parser()` with `_option(..., key="table.key")`.
+   Don't set a default: every option defaults to `SUPPRESS` (ADR-0011).
+4. If it feeds a formula, compute the derived value in `config.derived()`, nowhere else.
+5. Tests in `tests/unit/test_config.py`: the default in `PLAN_DEFAULTS`, a non-default value in
+   `NON_DEFAULT`, one bad value per rule and one boundary value. For a CLI flag, a precedence
+   case in `tests/unit/test_cli.py` if it has a new kind of value.
+6. Docs: a row in `docs/CONFIGURATION.md` (the default as a TOML value in backticks; the drift
+   test checks it), PLAN.md §6 or §7, and a CHANGELOG entry.
 
 ### Add a diagnostic code
-TODO (Phase 1)
+1. Append a `DiagnosticCode` with the next free number to `DIAGNOSTIC_CODES` in
+   `src/stlsplit/errors.py`. Never reuse or renumber a code; to stop using one, set
+   `retired=True` and keep it.
+2. Emit it from the stage with `errors.diagnostic(code, message, refs)` and return it with the
+   stage's result.
+3. Docs: a row in the table and a `### Wnnn — Title (severity)` section in
+   `docs/TROUBLESHOOTING.md` (the drift tests check both), PLAN.md §4.5, and a CHANGELOG entry.
+4. Test the condition that emits it.
 
 ### Add a connector type
 TODO (Phase 7)

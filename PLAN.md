@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r3** (2026-11-18); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r4** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -240,7 +240,7 @@ stlsplit/
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` |
 | `calibrate` | Calibration kit | `tools`, `labels` |
 | `assembly` | Assembly order; JSON and Markdown content; preview scene | `models`, `config` |
-| `io` | Reading and writing files; output-directory policy | `models`, `config` |
+| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` |
 | `cli` | Argument parsing, orchestration, logging, exit codes | everything |
 
 **Rules.** Only `io.py` and `cli.py` touch the file system (matplotlib reading its own font file is the
@@ -619,19 +619,22 @@ the key.
 
 ### 7.5 Validation (exit 1 with a message naming the option and the allowed range)
 
+- Every number is finite (TOML accepts `inf` and `nan`), and integers fit in 64 bits.
 - `bed`: three values > 0. `margin` ≥ 0 and `2·margin` < the smallest bed dimension.
 - `scale` > 0. `simplify` ≥ 0.
 - `diameter` > 0, `clearance` ≥ 0, `min_wall` > 0, `max_per_face` ≥ 1.
 - `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin).
 - `labels.depth` > 0 and < `min_wall`.
 - Peg mode: every `U_i − L_max/2` > 0.
-- Advanced: `axial_play` ≥ 0; `pin_length_step` > 0; 0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4;
-  0 ≤ `hole_chamfer` ≤ w/2; `circular_segments` ≥ 16; `nudge_window` ≥ 0; `nudge_step` > 0;
-  0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0; 0 < `label_min_height` ≤ `label_max_height`;
-  `calibration_clearances` has 1 to 10 values, each ≥ 0, sorted ascending; `preview_spread` ≥ 0;
-  `label_font` resolves to an existing file.
-- Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config`; `-o` present unless
-  `--dry-run` or `--print-config`.
+- Advanced: `axial_play` ≥ 0; `pin_length_step` > 0; `pin_min_length_factor` > 0;
+  0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4; 0 ≤ `hole_chamfer` ≤ w/2;
+  `circular_segments` ≥ 16; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
+  `nudge_window` ≥ 0; `nudge_step` > 0; 0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
+  0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
+  ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
+- Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config` (`--print-config` with
+  `INPUT` or `--calibrate` is an error); `--dry-run` needs `INPUT`; `-o` present unless
+  `--dry-run` or `--print-config` (with `--dry-run` it is accepted and ignored).
 
 ### 7.6 Output directory policy
 
@@ -1824,6 +1827,22 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Asymmetric L-shaped polycube | No mirroring |
 
 ## Appendix E — Plan revisions
+
+**r4 — 2026-11-19 (Phase 1).** Gaps in §7.5 found while planning Phase 1, agreed with the
+maintainer:
+
+- **Validation:** every number must be finite (TOML accepts `inf` and `nan`, and `inf` passed
+  rules such as `scale > 0`). `pin_min_length_factor > 0` is added: with L_min ≤ 0 a 0 mm pin
+  became a "standard length". `connector_spacing_factor > 0` and `connector_area_factor > 0` are
+  added. `calibration_clearances` must be strictly increasing (a duplicate gave two identical
+  holes with the same engraved code).
+- **Modes:** `--print-config` with `INPUT` or `--calibrate` is an error, `--dry-run` needs `INPUT`,
+  and `-o` is accepted and ignored with `--dry-run`.
+- **Found by the Phase 1 review:** integers must fit in 64 bits (the TOML range; `tomllib`
+  accepts any size, and a huge integer made `float()` overflow, giving exit 4 instead of 1).
+  `--print-config` writes pure ASCII and `--config` also reads UTF-8 with a BOM and UTF-16 with
+  a BOM: on Windows a redirected stdout isn't UTF-8 (PowerShell 5.1 writes UTF-16), so
+  `--print-config > file` didn't read back. §3.1 lists `errors` among the modules `io` imports.
 
 **r3 — 2026-11-18 (Phase 0).**
 

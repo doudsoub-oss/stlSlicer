@@ -70,7 +70,7 @@ whose code will.
 
 | Behaviour | Version | Used by | Spike check |
 |---|---|---|---|
-| `DejaVuSans-Bold.ttf` is bundled at `matplotlib.get_data_path()/fonts/ttf/`. The outer contours of `TextPath` glyphs are **clockwise**, so the Positive fill rule loses them: use EvenOdd (ADR-0009). | 3.11.2 | `labels` *(Phase 8)*; `geometry.crosssection_from_contours` | `matplotlib.font_and_glyph_winding` |
+| `DejaVuSans-Bold.ttf` is bundled at `matplotlib.get_data_path()/fonts/ttf/`. The outer contours of `TextPath` glyphs are **clockwise**, so the Positive fill rule loses them: use EvenOdd (ADR-0009). | 3.11.2 | `io.resolve_label_font`; `labels` *(Phase 8)*; `geometry.crosssection_from_contours` | `matplotlib.font_and_glyph_winding` |
 
 ### Determinism
 
