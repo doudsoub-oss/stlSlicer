@@ -118,12 +118,12 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | TOML key | Default | Unit | Meaning | Allowed values |
 |---|---|---|---|---|
 | `advanced.axial_play` | `0.5` | mm | Each hole is this much deeper than the pin end (glue room) | ≥ 0 |
-| `advanced.pin_length_step` | `2.0` | mm | Step between standard pin lengths (20, 18, 16 by default) | > 0 |
+| `advanced.pin_length_step` | `2.0` | mm | Step between standard pin lengths (20, 18, 16 by default) | ≥ 0.1 |
 | `advanced.pin_min_length_factor` | `3.0` | — | Shortest allowed pin L_min = factor × d | > 0 |
 | `advanced.pin_chamfer` | `0.5` | mm | Chamfer on pin and peg ends | ≥ 0 and < L_min / 4 |
 | `advanced.pin_flat` | `0.4` | mm | Depth of the flat pins are printed on (0 = round pins) | ≥ 0 and < d / 4 |
 | `advanced.hole_chamfer` | `0.4` | mm | Chamfer at the hole mouth | ≥ 0 and ≤ w / 2 |
-| `advanced.circular_segments` | `64` | — | Segments per circle | Integer ≥ 16 |
+| `advanced.circular_segments` | `64` | — | Segments per circle | Integer from 16 to 256 |
 | `advanced.connector_spacing_factor` | `3.0` | — | Minimum distance between connectors of one face = factor × d | > 0 |
 | `advanced.connector_area_factor` | `6.0` | — | Face area per connector = (factor × d)² | > 0 |
 | `advanced.section_epsilon` | `0.01` | mm | Half-thickness of the section probe (ADR-0002) | > 0 and ≤ 0.1 |

@@ -322,7 +322,13 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
         ),
         pytest.param({"advanced.axial_play": -0.1}, "advanced.axial_play", ">= 0", id="play"),
         pytest.param(
-            {"advanced.pin_length_step": 0.0}, "advanced.pin_length_step", "> 0", id="step"
+            {"advanced.pin_length_step": 0.0}, "advanced.pin_length_step", ">= 0.1", id="step"
+        ),
+        pytest.param(
+            {"advanced.pin_length_step": 0.09},
+            "advanced.pin_length_step",
+            ">= 0.1",
+            id="step-below-minimum",
         ),
         pytest.param(
             {"advanced.pin_min_length_factor": 0.0},
@@ -360,6 +366,12 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
             "advanced.circular_segments",
             ">= 16",
             id="circular-segments",
+        ),
+        pytest.param(
+            {"advanced.circular_segments": 257},
+            "advanced.circular_segments",
+            "<= 256",
+            id="circular-segments-max",
         ),
         pytest.param(
             {"advanced.connector_spacing_factor": 0.0},
@@ -468,6 +480,8 @@ def test_validation_rejects_bad_value(overrides: dict[str, Any], key: str, rule:
         pytest.param({"advanced.hole_chamfer": 0.0}, id="no-hole-chamfer"),
         pytest.param({"advanced.hole_chamfer": 1.0}, id="hole-chamfer-half-min-wall"),
         pytest.param({"advanced.circular_segments": 16}, id="sixteen-segments"),
+        pytest.param({"advanced.circular_segments": 256}, id="max-segments"),
+        pytest.param({"advanced.pin_length_step": 0.1}, id="smallest-step"),
         pytest.param({"advanced.nudge_window": 0.0}, id="nudging-off"),
         pytest.param({"advanced.section_epsilon": 0.1}, id="epsilon-max"),
         pytest.param({"advanced.small_piece_volume": 0.0}, id="merging-off"),

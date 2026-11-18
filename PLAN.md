@@ -64,7 +64,7 @@ what surprised you, what to watch.
 | Phase | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | 0 | Scaffolding, documentation skeleton, API spike | done | `2060291`, `44c2cdb` (tag `v0.0.0`) | CI green on Linux 3.12/3.13/3.14, Windows 3.13 and macOS 3.13 (macOS runners can queue for a long time; a job that is never acquired is a capacity problem, re-run it). CI actions are on v7 (Node 24). Dev machine has no system Python ≥ 3.12: use uv (CONTRIBUTING.md). For Phase 1: move `geometry.POLYLABEL_TOLERANCE` to `config.py`; `models.py` holds only `Axis` so far; `errors.py` already has `ExitCode` and the W001–W012 registry. Frames: plane at local z = o both ways (Appendix E, r3). `ruff format` excludes `*.md` (it was rewriting PLAN.md code blocks); manifold3d is in mypy's `ignore_missing_imports` (its `.pyi` has no `py.typed`). Python 3.14 is added to Linux CI. |
-| 1 | Configuration and CLI shell | done | `e869e3b` | For Phase 2: `io.py` exists (output-directory policy, `OWNED_OUTPUTS`, label-font lookup); `io.load_stl` goes there. `cli._run` stops every mode with a "not implemented yet" warning after the checks: replace that stub as stages land; `cli._require_input_file` can move into `io.load_stl`. Stages build diagnostics with `errors.diagnostic()` and return them; `cli.report_diagnostics()` turns them into the exit code. Numbers come from `config.derived(cfg)` only. Open: a tiny `advanced.pin_length_step` passes §7.5 but makes `derived()` build millions of standard lengths (1e-6 → 5 M; 1e-300 never ends), and `circular_segments` can be up to 2^63: both need a bound before Phases 5 and 7 use them (maintainer decision pending). `--print-config` writes ASCII; `--config` reads UTF-8 (BOM or not) and UTF-16 with a BOM, for Windows. Symlink tests skip only if the OS refuses to create a symlink. The review found two bugs (huge TOML integers exited 4; the Windows `--print-config > file` round trip), both fixed and tested (PLAN r4). |
+| 1 | Configuration and CLI shell | done | `e869e3b` | For Phase 2: `io.py` exists (output-directory policy, `OWNED_OUTPUTS`, label-font lookup); `io.load_stl` goes there. `cli._run` stops every mode with a "not implemented yet" warning after the checks: replace that stub as stages land; `cli._require_input_file` can move into `io.load_stl`. Stages build diagnostics with `errors.diagnostic()` and return them; `cli.report_diagnostics()` turns them into the exit code. Numbers come from `config.derived(cfg)` only. `pin_length_step` ≥ 0.1 and `circular_segments` ≤ 256 were added after the review (r4). Still open: in dowel mode `connectors.length` has no upper bound, so a huge `--dowel-length` would make `derived()` build (L_max − L_min) / 0.1 standard lengths; bound it (e.g. by the usable volume) when Phase 5 starts using the lengths. `--print-config` writes ASCII; `--config` reads UTF-8 (BOM or not) and UTF-16 with a BOM, for Windows. Symlink tests skip only if the OS refuses to create a symlink. The review found two bugs (huge TOML integers exited 4; the Windows `--print-config > file` round trip), both fixed and tested (PLAN r4). |
 | 2 | Load, repair, shell normalization | todo | | |
 | 3 | Orientation and even grid | todo | | |
 | 4 | Sections, cutting, cut faces, small-piece merge | todo | | |
@@ -626,9 +626,9 @@ the key.
 - `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin).
 - `labels.depth` > 0 and < `min_wall`.
 - Peg mode: every `U_i − L_max/2` > 0.
-- Advanced: `axial_play` ≥ 0; `pin_length_step` > 0; `pin_min_length_factor` > 0;
+- Advanced: `axial_play` ≥ 0; `pin_length_step` ≥ 0.1; `pin_min_length_factor` > 0;
   0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4; 0 ≤ `hole_chamfer` ≤ w/2;
-  `circular_segments` ≥ 16; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
+  16 ≤ `circular_segments` ≤ 256; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
   `nudge_window` ≥ 0; `nudge_step` > 0; 0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
   0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
   ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
@@ -1843,6 +1843,10 @@ maintainer:
   `--print-config` writes pure ASCII and `--config` also reads UTF-8 with a BOM and UTF-16 with
   a BOM: on Windows a redirected stdout isn't UTF-8 (PowerShell 5.1 writes UTF-16), so
   `--print-config > file` didn't read back. §3.1 lists `errors` among the modules `io` imports.
+- **Bounds agreed after the review:** `pin_length_step` ≥ 0.1 (it was only > 0, and 1e-6 made
+  `derived()` build 5 million standard lengths; 1e-300 never finished) and `circular_segments`
+  ≤ 256 (it had no upper bound; at 256 a 5.4 mm hole's polygon is within 0.0002 mm of its
+  circle, and more segments only add triangles).
 
 **r3 — 2026-11-18 (Phase 0).**
 

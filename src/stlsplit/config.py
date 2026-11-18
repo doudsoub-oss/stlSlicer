@@ -61,6 +61,12 @@ TOML_INT_MAX = 2**63 - 1
 
 # Validation bounds (§7.5).
 MIN_CIRCULAR_SEGMENTS = 16
+MAX_CIRCULAR_SEGMENTS = 256
+"""At 256 segments, a 5.4 mm hole's polygon is within 0.0002 mm of its circle, far below print
+resolution; more segments only multiply the triangles of every hole (PLAN.md Appendix E, r4)."""
+MIN_PIN_LENGTH_STEP = 0.1
+"""mm. Bounds the number of standard pin lengths, (L_max − L_min) / Δ + 1 (PLAN.md Appendix E,
+r4): a tiny step made ``derived()`` build millions of lengths."""
 MAX_SECTION_EPSILON = 0.1
 MAX_CALIBRATION_CLEARANCES = 10
 PIN_FLAT_DIVISOR = 4
@@ -399,7 +405,12 @@ def validate(cfg: Config) -> None:
         )
 
     _check(adv.axial_play >= 0, "advanced.axial_play", "must be >= 0", adv.axial_play)
-    _check(adv.pin_length_step > 0, "advanced.pin_length_step", "must be > 0", adv.pin_length_step)
+    _check(
+        adv.pin_length_step >= MIN_PIN_LENGTH_STEP,
+        "advanced.pin_length_step",
+        f"must be >= {_show(MIN_PIN_LENGTH_STEP)}",
+        adv.pin_length_step,
+    )
     _check(adv.pin_flat >= 0, "advanced.pin_flat", "must be >= 0", adv.pin_flat)
     flat_max = c.diameter / PIN_FLAT_DIVISOR
     _check(
@@ -425,9 +436,9 @@ def validate(cfg: Config) -> None:
         adv.hole_chamfer,
     )
     _check(
-        adv.circular_segments >= MIN_CIRCULAR_SEGMENTS,
+        MIN_CIRCULAR_SEGMENTS <= adv.circular_segments <= MAX_CIRCULAR_SEGMENTS,
         "advanced.circular_segments",
-        f"must be >= {MIN_CIRCULAR_SEGMENTS}",
+        f"must be >= {MIN_CIRCULAR_SEGMENTS} and <= {MAX_CIRCULAR_SEGMENTS}",
         adv.circular_segments,
     )
     _check(
