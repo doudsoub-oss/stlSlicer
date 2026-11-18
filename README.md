@@ -4,8 +4,9 @@ Split an STL model that is too big for your printer into pieces that each fit th
 with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
 assembly map telling you which piece goes where.
 
-> **Status:** under development (Phase 0 of PLAN.md). Nothing below the install section works
-> yet; sections marked TODO are filled in as the features land.
+> **Status:** under development (Phase 1 of PLAN.md). The command line, the configuration and
+> the output-directory policy work; the split itself doesn't exist yet, so every mode stops with
+> a warning after its checks. Sections marked TODO are filled in as the features land.
 
 ```bash
 stlsplit model.stl -o ./out --bed 220 220 250
@@ -28,9 +29,38 @@ Optional, GPL-licensed repair fallback for badly broken meshes: `pip install -e 
 
 TODO (Phase 9): from a model to printed, assembled pieces.
 
-## Examples
+## Usage
 
-TODO (Phase 1): common invocations, a TOML configuration file (docs/CONFIGURATION.md).
+```bash
+stlsplit model.stl -o ./out --bed 220 220 250        # split for a 220 × 220 × 250 mm bed
+stlsplit model.stl -o ./out --config my_printer.toml --connector peg --clearance 0.25
+stlsplit model.stl --dry-run                         # print the plan, write nothing
+stlsplit --calibrate -o ./calibration                # print once, then pick your clearance
+stlsplit --print-config --config my_printer.toml     # show the effective settings
+stlsplit --help                                      # every option, with its default
+```
+
+Settings come from three places, each overriding the one before: the built-in defaults, a TOML
+file given with `--config`, then the options you type. A configuration file for a smaller
+printer:
+
+```toml
+[printer]
+bed = [180, 180, 180]
+margin = 4                 # mm kept free on each side
+
+[connectors]
+diameter = 6.0
+length = 24.0              # exact length of a full pin
+clearance = 0.25           # measured with --calibrate
+```
+
+`stlsplit --print-config > my_printer.toml` writes every setting with its current value, a good
+starting point for your own file. The output directory must be empty unless you pass `--force`,
+which replaces only stlsplit's own outputs and keeps your other files.
+
+Every option, its default and its allowed values: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Exit codes and error messages: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## Calibration: choosing your clearance
 

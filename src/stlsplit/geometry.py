@@ -18,12 +18,8 @@ from numpy.typing import ArrayLike, NDArray
 from shapely.geometry import Polygon
 from shapely.ops import polylabel
 
+from stlsplit.config import POLYLABEL_TOLERANCE
 from stlsplit.models import Axis
-
-# Tolerance of the polylabel point used to sort regions, mm. It only orders regions, so it
-# needs to separate distinct regions, not locate the point precisely (§4.3).
-# TODO (Phase 1): move to config.py with the other named constants.
-POLYLABEL_TOLERANCE = 1e-3
 
 # Rows of the world -> plane-local rotation per plane axis: local (x, y, z) = world axes
 # (§4.2). Each is a cyclic permutation, so det = +1 (ADR-0008).

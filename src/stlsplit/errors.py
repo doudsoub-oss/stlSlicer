@@ -1,15 +1,21 @@
 """Exit codes, exception types and the registry of diagnostic codes.
 
 Used by every stage of the pipeline (PLAN.md §5.1) to report failures and diagnostics.
-Exit codes and diagnostic codes are documented in docs/TROUBLESHOOTING.md. Codes are never
-reused or renumbered; retired codes stay in the registry marked as retired (§4.5).
+Failures are exceptions carrying their exit code; ``cli.main`` turns them into one line on
+stderr. Diagnostics are ``models.Diagnostic`` values that stages return with their results;
+``exit_code_for`` turns the collected list into the run's exit code (docs/ARCHITECTURE.md,
+"Diagnostics flow").
+
+Exit codes and diagnostic codes are documented in docs/TROUBLESHOOTING.md (a drift test keeps
+them in sync). Codes are never reused or renumbered; retired codes stay in the registry marked
+as retired (§4.5).
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Literal
 
-Severity = Literal["info", "warning", "partial"]
+from stlsplit.models import Diagnostic, Severity
 
 
 class ExitCode(IntEnum):
@@ -37,6 +43,21 @@ class InputError(StlsplitError):
     """Invalid input file, arguments, configuration or output directory (exit 1)."""
 
     exit_code = ExitCode.INVALID_INPUT
+
+
+class ConfigError(InputError):
+    """An invalid configuration key or value (exit 1).
+
+    Attributes:
+        key: Dotted TOML key, e.g. ``"connectors.clearance"``, or the table name for a bad
+            table. The CLI adds the matching flag to the message.
+        problem: What is wrong, with the allowed range and the value found.
+    """
+
+    def __init__(self, key: str, problem: str) -> None:
+        super().__init__(f"{key}: {problem}")
+        self.key = key
+        self.problem = problem
 
 
 class RepairError(StlsplitError):
@@ -81,3 +102,40 @@ DIAGNOSTIC_CODES: tuple[DiagnosticCode, ...] = (
     DiagnosticCode("W012", "info", "The model already fits: nothing to cut."),
 )
 """Every diagnostic code, sorted by code (PLAN.md §4.5)."""
+
+_REGISTRY: dict[str, DiagnosticCode] = {entry.code: entry for entry in DIAGNOSTIC_CODES}
+
+
+def diagnostic(code: str, message: str, refs: Iterable[str] = ()) -> Diagnostic:
+    """Build a diagnostic whose severity comes from the registry.
+
+    Args:
+        code: A registered, non-retired code, e.g. ``"W001"``.
+        message: One line for the user.
+        refs: IDs of the pieces, faces or connectors concerned; their order is kept.
+
+    Returns:
+        The diagnostic.
+
+    Raises:
+        ValueError: ``code`` is not registered or is retired. That is a bug, not a user
+            error, so the CLI reports it as an internal error (exit 4).
+    """
+    entry = _REGISTRY.get(code)
+    if entry is None or entry.retired:
+        raise ValueError(f"diagnostic code {code} is not registered or is retired")
+    return Diagnostic(code=code, severity=entry.severity, message=message, refs=tuple(refs))
+
+
+def exit_code_for(diagnostics: Iterable[Diagnostic]) -> ExitCode:
+    """Return the exit code of a run that produced ``diagnostics`` without failing.
+
+    Args:
+        diagnostics: Everything the stages reported.
+
+    Returns:
+        ``PARTIAL`` (3) if any diagnostic has severity ``partial``, else ``SUCCESS`` (0).
+    """
+    if any(d.severity == "partial" for d in diagnostics):
+        return ExitCode.PARTIAL
+    return ExitCode.SUCCESS
