@@ -19,6 +19,10 @@ python scripts/check.py
 No Python 3.12+ on your system? [uv](https://docs.astral.sh/uv/) installs one without
 touching system packages: `uv python install 3.13`.
 
+The `--deep-repair` tests and the pymeshlab spike check are skipped unless the optional extra
+is installed: `pip install -e ".[dev,deep-repair]"` (pymeshlab is GPL-3.0; it is never
+imported without `--deep-repair`). CI installs it in the Linux 3.13 job.
+
 ## Commands
 
 ```bash

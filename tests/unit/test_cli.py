@@ -8,15 +8,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import trimesh
 from manifold3d import Manifold
 
 from stlsplit import __version__, cli, config, errors
 from stlsplit.config import Config
 from stlsplit.errors import ExitCode
-from tests.conftest import cube
+from tests.conftest import capless_sphere, cube, missing_face_cube, two_bodies
 from tests.unit.test_config import EXAMPLE_TOML
 
-WriteStl = Callable[[Manifold, str], Path]
+WriteStl = Callable[[Manifold | trimesh.Trimesh, str], Path]
 
 
 def test_version_prints_package_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -283,6 +284,75 @@ def test_dry_run_accepts_and_ignores_the_output_option(write_stl: WriteStl, tmp_
     stl = write_stl(cube(), "model")
     assert cli.main([str(stl), "--dry-run", "-o", str(out)]) == ExitCode.SUCCESS
     assert not out.exists()
+
+
+# --- load and repair (PLAN.md Phase 2) -------------------------------------------------------
+
+
+def test_unrepairable_mesh_exits_2_and_keeps_the_previous_outputs(
+    write_stl: WriteStl, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Load and repair run before the output directory is prepared, so --force never deletes
+    # the previous outputs for a mesh that can't be used.
+    out = tmp_path / "out"
+    (out / "parts").mkdir(parents=True)
+    (out / "parts" / "old.stl").write_text("old")
+    broken = write_stl(capless_sphere(), "broken")
+    argv = [str(broken), "-o", str(out), "--force", "-q"]
+    assert cli.main(argv) == ExitCode.UNREPAIRABLE
+    err = capsys.readouterr().err
+    assert err.startswith("stlsplit: error: ")
+    assert len(err.splitlines()) == 1
+    assert "open edges" in err
+    assert (out / "parts" / "old.stl").is_file()
+
+
+def test_load_warnings_are_shown_even_when_repair_fails(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = write_stl(capless_sphere(), "broken")
+    assert cli.main([str(broken), "--dry-run", "--scale", "0.001"]) == ExitCode.UNREPAIRABLE
+    err = capsys.readouterr().err
+    assert "W006" in err
+    assert err.index("W006") < err.index("stlsplit: error: ")
+
+
+def test_dry_run_logs_the_model_summary_and_the_stage_timings(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(two_bodies(), "model")
+    assert cli.main([str(stl), "--dry-run", "-v"]) == ExitCode.SUCCESS
+    err = capsys.readouterr().err
+    summary = next(line for line in err.splitlines() if line.startswith("model: "))
+    assert "24 triangles" in summary
+    assert "2 bodies" in summary
+    assert "0 voids" in summary
+    assert "volume 2000 mm^3" in summary
+    assert "30 x 10 x 10 mm" in summary
+    assert "repair: none" in summary
+    assert "debug: stage load: " in err
+    assert "debug: stage repair: " in err
+
+
+def test_simplify_that_erases_the_model_exits_1_naming_the_flag(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(cube(), "model")
+    assert cli.main([str(stl), "--dry-run", "--simplify", "1000", "-q"]) == ExitCode.INVALID_INPUT
+    err = capsys.readouterr().err
+    assert "--simplify (model.simplify)" in err
+    assert len(err.splitlines()) == 1
+
+
+def test_repair_diagnostics_are_reported(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(missing_face_cube(), "model")
+    assert cli.main([str(stl), "--dry-run"]) == ExitCode.SUCCESS
+    err = capsys.readouterr().err
+    assert "W007 " in err
+    assert "repair: " in err
+    assert "repair: none" not in err
 
 
 # --- --print-config --------------------------------------------------------------------------

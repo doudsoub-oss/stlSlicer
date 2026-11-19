@@ -28,11 +28,40 @@ Common cases:
 | `--config my.toml: not valid UTF-8 text` | The file was saved in another encoding | Save it as UTF-8 (or UTF-16 with a byte order mark) |
 | `advanced.label_font: no such font file` | The font is neither a font bundled with matplotlib nor an existing absolute path | Use the default `DejaVuSans-Bold.ttf` or an absolute path |
 | `INPUT model.stl: no such file` | The input path is wrong | Check the path |
+| `INPUT model.stl: no triangles found` | The file is empty, isn't an STL, or is an STL without facets | Export the model again as STL |
+| `--simplify (model.simplify): a tolerance of 1000 mm removed the whole model` | The `--simplify` tolerance is as large as the model | Use a much smaller tolerance (a few hundredths of a mm is typical), or none |
+| `INPUT model.stl: can't read it as an STL file` | The file is damaged, e.g. a binary STL cut short during a download or copy | Export or download it again |
 | `output directory out is not empty` | stlsplit refuses to mix its outputs with existing files | Use an empty directory, or add `--force`: it replaces only stlsplit's own outputs and keeps everything else |
 | `output directory out exists and is not a directory` | `-o` points to a file | Choose another path |
 
 ### 2 — Mesh can't be repaired
-TODO (Phase 2): cause and fix (`--deep-repair`, repairing in a mesh editor).
+The mesh isn't a closed solid, and the repairs stlsplit is allowed to make didn't fix it.
+Example:
+
+```
+stlsplit: error: the mesh isn't a closed solid after basic repair: 37 open edges,
+0 non-manifold edges, 1 body. Try --deep-repair (needs pip install "stlsplit[deep-repair]"),
+or repair the model in MeshLab or with your slicer's "fix model", then run stlsplit again
+```
+
+- **Open edges** are the rims of holes. Basic repair only closes holes of one triangle or one
+  quad; a missing cap or a cut-open model needs more.
+- **Non-manifold edges** are shared by three or more triangles: stray faces, internal walls,
+  fins left by a bad export.
+- **Bodies** is the number of separate connected parts.
+
+Fixes, in order:
+
+1. Add `--deep-repair` (install the extra first: `pip install "stlsplit[deep-repair]"`; it
+   uses pymeshlab, GPL-3.0). It removes non-manifold edges and vertices and closes holes.
+2. Repair the model in MeshLab, or with your slicer's "fix model" or "repair" function, export
+   it as STL again, and rerun stlsplit.
+
+`the mesh encloses no volume` means the file is a closed but flat surface (a single sheet,
+faces facing both ways): there is no solid to split. Give the surface a thickness first.
+
+stlsplit never modifies a valid model: repair runs only when the mesh is not already a closed
+solid ([ALGORITHMS.md](ALGORITHMS.md#repair-and-shell-normalization)).
 
 ### 3 — Partial success
 At least one diagnostic of severity `partial` (for example W001). The files are written; read
@@ -78,10 +107,15 @@ TODO (Phase 4)
 TODO (Phase 4)
 
 ### W006 — Suspicious scale (warning)
-TODO (Phase 2)
+The model's largest dimension is under 1 mm or over 5000 mm after `--scale`. STL files have no
+units and stlsplit reads them as millimetres, so the model was probably exported in another
+unit: metres (too small) or micrometres (too big). Check the size printed in the `model:` line.
+Fix: `--scale 1000` for metres, `--scale 25.4` for inches, `--scale 0.001` for micrometres.
 
 ### W007 — Mesh repaired (info)
-TODO (Phase 2)
+The mesh wasn't a closed solid as loaded, and basic repair (or `--deep-repair`) fixed it. The
+message lists each step that changed something, e.g. `triangles added to close holes: 2`.
+Nothing to do, but check the parts in your slicer: a hole closed by repair is flat.
 
 ### W008 — Piece without cut face (info)
 TODO (Phase 4)
@@ -90,10 +124,17 @@ TODO (Phase 4)
 TODO (Phase 5)
 
 ### W010 — Overlapping shells merged (info)
-TODO (Phase 2)
+The file holds several closed shells that overlap, as models assembled from separate meshes
+often do. They were unioned into one solid, so the overlap is no longer counted twice; the
+message gives the volume before and after. Nothing to do.
 
 ### W011 — Inside-out body flipped (warning)
-TODO (Phase 2)
+Some closed shells had their faces pointing the wrong way for where they are, and stlsplit
+turned them the right way out; the message gives how many. Typical causes: a whole model
+exported inside out (its outer shell faces inwards and its hollows face outwards), or a body
+next to the model exported with reversed faces. A shell is read as a hollow (a void) when it
+lies entirely inside another shell and faces the other way. Check that the model looks as
+expected, especially its hollows.
 
 ### W012 — Model already fits (info)
 TODO (Phase 3)

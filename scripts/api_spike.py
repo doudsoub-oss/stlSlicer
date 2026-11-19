@@ -5,8 +5,9 @@ Run it after any dependency upgrade:
     python scripts/api_spike.py
 
 It prints the installed versions, then runs one check per behaviour and stops at the first
-failure with exit code 1. Each check name matches a row of docs/LIBRARY_NOTES.md. If a check
-fails after an upgrade, don't work around it: update the code that depends on it (the
+failure with exit code 1. A check of an optional package (pymeshlab) is reported as skipped
+when that package isn't installed. Each check name matches a row of docs/LIBRARY_NOTES.md. If
+a check fails after an upgrade, don't work around it: update the code that depends on it (the
 LIBRARY_NOTES row says which) and the notes, or pin the dependency.
 """
 
@@ -31,6 +32,7 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import polylabel
 
 PACKAGES = ("manifold3d", "trimesh", "numpy", "scipy", "networkx", "shapely", "matplotlib")
+OPTIONAL_PACKAGES = ("pymeshlab",)
 TOL = 1e-6
 
 Check = Callable[[], None]
@@ -45,6 +47,10 @@ def check(name: str) -> Callable[[Check], Check]:
         return fn
 
     return register
+
+
+class SkippedError(Exception):
+    """Raised by a check whose optional package isn't installed."""
 
 
 def expect(condition: bool, message: str) -> None:
@@ -233,6 +239,64 @@ def manifold_slice_at_step() -> None:
         expect(close(contact, 100.0), f"{name}: contact {contact}, expected 100")
 
 
+def mesh_to_manifold(mesh: trimesh.Trimesh) -> Manifold:
+    vertices = np.ascontiguousarray(mesh.vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(mesh.faces, dtype=np.uint32)
+    return Manifold(Mesh(vert_properties=vertices, tri_verts=faces))
+
+
+def stacked(*meshes: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Concatenate meshes, then merge coincident vertices as ``trimesh.load`` does."""
+    mesh = trimesh.util.concatenate(list(meshes))
+    mesh.merge_vertices()
+    return mesh
+
+
+@check("manifold.signed_shells")
+def manifold_signed_shells() -> None:
+    hollow = Manifold.sphere(150.0, 64) - Manifold.sphere(148.0, 64)
+    signs = sorted(shell.volume() > 0 for shell in hollow.decompose())
+    expect(signs == [False, True], f"hollow sphere shells: positive flags {signs}")
+    box = trimesh.creation.box((10.0, 10.0, 10.0))
+    inside_out = mesh_to_manifold(trimesh.Trimesh(box.vertices, box.faces[:, ::-1], process=False))
+    expect(inside_out.status() == Error.NoError, f"inside-out cube: {inside_out.status()}")
+    expect(close(inside_out.volume(), -1000.0), f"inside-out cube volume {inside_out.volume()}")
+    expect(len(inside_out.decompose()) == 1, "inside-out cube should be one shell")
+    other = box.copy()
+    other.apply_translation((5.0, 0.0, 0.0))
+    overlapping = mesh_to_manifold(trimesh.util.concatenate([box, other]))
+    expect(overlapping.status() == Error.NoError, "overlapping shells are valid by index")
+    expect(close(overlapping.volume(), 2000.0), f"overlap volume {overlapping.volume()}")
+    reversed_faces = np.array(inside_out.to_mesh().tri_verts[:, ::-1], dtype=np.uint32)
+    vertices = np.array(inside_out.to_mesh().vert_properties[:, :3], dtype=np.float32)
+    flipped = Manifold(Mesh(vert_properties=vertices, tri_verts=reversed_faces))
+    expect(close(flipped.volume(), 1000.0), f"reversed winding volume {flipped.volume()}")
+
+
+@check("manifold.edge_touching_cubes")
+def manifold_edge_touching_cubes() -> None:
+    first = trimesh.creation.box((10.0, 10.0, 10.0))
+    second = first.copy()
+    second.apply_translation((10.0, 10.0, 0.0))
+    touching = stacked(first, second)
+    expect(len(touching.vertices) == 14, f"shared edge vertices merged: {len(touching.vertices)}")
+    body = mesh_to_manifold(touching)
+    expect(body.status() == Error.NoError, f"edge-touching cubes: {body.status()}")
+    expect(len(body.decompose()) == 2, "edge-touching cubes should be two shells")
+    expect(close(body.volume(), 2000.0), f"edge-touching volume {body.volume()}")
+
+
+def finned_box() -> trimesh.Trimesh:
+    """A 10 mm box with one stray triangle on an edge: a non-manifold edge, two open edges."""
+    box = trimesh.creation.box((10.0, 10.0, 10.0))
+    box.apply_translation((5.0, 5.0, 5.0))
+    bottom = int(np.argmin(np.linalg.norm(box.vertices - (10.0, 10.0, 0.0), axis=1)))
+    top = int(np.argmin(np.linalg.norm(box.vertices - (10.0, 10.0, 10.0), axis=1)))
+    vertices = np.vstack([box.vertices, [(15.0, 15.0, 5.0)]])
+    faces = np.vstack([box.faces, [(bottom, top, len(box.vertices))]])
+    return trimesh.Trimesh(vertices, faces, process=False)
+
+
 # --- trimesh ------------------------------------------------------------------------------
 
 
@@ -250,6 +314,17 @@ def trimesh_load_merges_vertices() -> None:
     loaded = trimesh.load(trimesh.util.wrap_as_stream(data), file_type="stl", force="mesh")
     expect(len(loaded.vertices) == 8, f"load should merge vertices, got {len(loaded.vertices)}")
     expect(loaded.is_watertight, "merged soup should be watertight")
+
+
+@check("trimesh.load_drops_non_finite")
+def trimesh_load_drops_non_finite() -> None:
+    box = trimesh.creation.box((10.0, 10.0, 10.0))
+    vertices = np.vstack([box.vertices, [(np.nan, 0.0, 0.0)]])
+    faces = np.vstack([box.faces, [(0, 1, len(box.vertices))]])
+    data = trimesh.Trimesh(vertices, faces, process=False).export(file_type="stl")
+    loaded = trimesh.load(trimesh.util.wrap_as_stream(data), file_type="stl", force="mesh")
+    expect(len(loaded.faces) == 12, f"the NaN triangle should be dropped: {len(loaded.faces)}")
+    expect(bool(np.isfinite(loaded.vertices).all()), "no non-finite vertex should remain")
 
 
 @check("trimesh.cleanup_methods")
@@ -360,6 +435,27 @@ def trimesh_fix_normals_multibody() -> None:
     expect(multi.volume > 10 * expected, "multibody=True is expected to fill the void")
 
 
+@check("trimesh.fix_winding_reference_face")
+def trimesh_fix_winding_reference_face() -> None:
+    outer = trimesh.creation.icosphere(subdivisions=3, radius=150.0)
+    inner = trimesh.creation.icosphere(subdivisions=3, radius=148.0)
+    inner.invert()
+    hollow = trimesh.util.concatenate([outer, inner])
+    # fix_winding starts each shell's traversal at the shell's first face in face_adjacency
+    # order (networkx node order) and makes the whole shell agree with it.
+    order = dict.fromkeys(hollow.face_adjacency.ravel().tolist())
+    reference = next(face for face in order if face >= len(outer.faces))  # void's shell
+    faces = np.array(hollow.faces)
+    faces[reference] = faces[reference][::-1]
+    mesh = trimesh.Trimesh(hollow.vertices, faces, process=False)
+    trimesh.repair.fix_winding(mesh)
+    changed = int(np.count_nonzero((mesh.faces != faces).any(axis=1)))
+    expect(
+        changed == len(inner.faces) - 1,
+        f"fix_winding should follow the reference face, not the majority: {changed} changed",
+    )
+
+
 @check("trimesh.stl_zero_header")
 def trimesh_stl_zero_header() -> None:
     data = trimesh.creation.box((10.0, 10.0, 10.0)).export(file_type="stl")
@@ -427,6 +523,38 @@ def determinism_pipeline(out_dir: Path) -> None:
         tm.export(out_dir / f"piece_{index}.stl", file_type="stl")
 
 
+# --- pymeshlab (optional extra deep-repair) --------------------------------------------------
+
+
+@check("pymeshlab.repair_filters")
+def pymeshlab_repair_filters() -> None:
+    try:
+        import pymeshlab
+    except ModuleNotFoundError as exc:
+        raise SkippedError("pymeshlab is not installed (extra deep-repair)") from exc
+    fin = finned_box()
+    before = mesh_to_manifold(fin)
+    expect(before.status() != Error.NoError, "the finned box should not be a valid manifold")
+    meshes = pymeshlab.MeshSet()
+    meshes.add_mesh(
+        pymeshlab.Mesh(
+            vertex_matrix=np.asarray(fin.vertices, dtype=np.float64),
+            face_matrix=np.asarray(fin.faces, dtype=np.int32),
+        )
+    )
+    meshes.meshing_repair_non_manifold_edges()
+    meshes.meshing_repair_non_manifold_vertices()
+    meshes.meshing_close_holes()
+    meshes.meshing_re_orient_faces_coherently()
+    expect(hasattr(pymeshlab, "PyMeshLabException"), "pymeshlab.PyMeshLabException exists")
+    result = meshes.current_mesh()
+    repaired = mesh_to_manifold(
+        trimesh.Trimesh(result.vertex_matrix(), result.face_matrix(), process=False)
+    )
+    expect(repaired.status() == Error.NoError, f"repaired fin: {repaired.status()}")
+    expect(close(repaired.volume(), 1000.0), f"repaired fin volume {repaired.volume()}")
+
+
 @check("determinism.subprocess_bytes")
 def determinism_subprocess_bytes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -454,6 +582,11 @@ def print_versions() -> None:
     print(f"python {sys.version.split()[0]}")
     for package in PACKAGES:
         print(f"{package} {importlib.metadata.version(package)}")
+    for package in OPTIONAL_PACKAGES:
+        try:
+            print(f"{package} {importlib.metadata.version(package)} (optional)")
+        except importlib.metadata.PackageNotFoundError:
+            print(f"{package} not installed (optional)")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -465,14 +598,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     print_versions()
+    skipped = 0
     for name, fn in CHECKS:
         try:
             fn()
+        except SkippedError as reason:
+            print(f"skip {name}: {reason}")
+            skipped += 1
+            continue
         except Exception as exc:  # report any failure, including library errors
             print(f"FAIL {name}: {type(exc).__name__}: {exc}")
             return 1
         print(f"ok   {name}")
-    print(f"all {len(CHECKS)} checks passed")
+    passed = len(CHECKS) - skipped
+    print(f"all {passed} checks passed" + (f", {skipped} skipped" if skipped else ""))
     return 0
 
 

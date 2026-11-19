@@ -23,8 +23,8 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`; the others come with their phase) |
 | `errors` | Exit codes, exception types, diagnostic registry | `models` | ✓ |
 | `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` | ✓ |
-| `geometry` | Thin wrappers around library calls; frames; sections; rays; cylinders | `config`, `models` | ✓ (sections in Phase 4) |
-| `repair` | Try-first repair, shell normalization | `geometry` | TODO (Phase 2) |
+| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections; rays; cylinders | `config`, `models` | ✓ (sections in Phase 4) |
+| `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
 | `connectors` | Connector placement | `geometry` | TODO (Phase 5) |
 | `grid` | Usable volume, auto-orient, even grid, nudging | `geometry`, `connectors` | TODO (Phase 3) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry` | TODO (Phase 4) |
@@ -32,8 +32,8 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` | TODO (Phase 7) |
 | `calibrate` | Calibration kit | `tools`, `labels` | TODO (Phase 7) |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
-| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (output-directory policy, label-font lookup; STL loading in Phase 2) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (stops after the checks until the stages exist) |
+| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup; writing in Phase 9) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after repair until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -57,6 +57,40 @@ config.derived(cfg) → Derived: U, L_min, standard lengths, h(L), r_h, r_model,
 - argparse's own usage errors would exit 2, which means "unrepairable" here; `cli` makes them
   raise `InputError` (exit 1).
 - Stages never read argparse values: only the merged `Config` and `derived(cfg)`.
+
+## Load and repair
+
+```
+INPUT ──io.load_stl──▶ trimesh mesh (input frame, ×scale)  + W006
+          │              trimesh.load(file_type="stl", force="mesh"): vertices merged,
+          │              non-finite triangles dropped; no triangle → InputError (exit 1)
+          ▼
+repair.prepare ──▶ Manifold (input frame) + RepairReport
+   1. geometry.to_manifold(mesh): NoError? → skip repair entirely      (ADR-0007)
+   2. geometry.basic_repair (trimesh)                                   → W007
+   3. geometry.deep_repair (pymeshlab, only with --deep-repair)        → W007
+      still invalid → RepairError (exit 2): open / non-manifold edges, bodies, hint
+   4. repair.normalize_shells: roles from containment and orientation;
+      union solids, keep voids at any depth, turn inside-out shells    → W010, W011
+   5. empty result → RepairError (exit 2)
+   6. Manifold.simplify(--simplify) when > 0; erases everything → ConfigError (exit 1)
+```
+
+- **Library boundary.** `repair` never calls trimesh or pymeshlab: every call is a wrapper in
+  `geometry` (ADR-0001). pymeshlab (GPL-3.0, extra `deep-repair`) is imported inside
+  `geometry.deep_repair` only; `geometry.deep_repair_available()` checks for it without
+  importing it.
+- **`RepairReport`** (in `repair`, not `models`: only the CLI reads it) holds the repair steps,
+  the counts of bodies, voids and shells turned the right way out, the diagnostics, and
+  `reference_volume`: the volume of the returned body, measured after `--simplify`, the
+  reference of I3.
+- **Order in the CLI.** Load and repair run before `io.prepare_output_dir`, so an input that
+  fails (exit 1 or 2) never creates the output directory, and `--force` never deletes the
+  previous outputs for it. Each stage's diagnostics are logged as soon as it returns, so W006
+  still shows when repair then fails. The summary line, at info level:
+  `model: 12 triangles, 1 body, 0 voids; 10 x 10 x 10 mm from (0, 0, 0); volume 1000 mm^3;
+  repair: none`.
+- The algorithm and its limits: [ALGORITHMS.md](ALGORITHMS.md#repair-and-shell-normalization).
 
 ## Data model
 
@@ -102,11 +136,12 @@ Exit codes and the diagnostic registry live in `errors.py` (`ExitCode`, `DIAGNOS
 are documented in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 - **Failures** are exceptions: `InputError` (exit 1, `ConfigError` for a bad key or value),
-  `RepairError` (exit 2). `cli.main` prints each as one line, `stlsplit: error: …`, plus the
+  `RepairError` (exit 2, raised by `repair.prepare`). `cli.main` prints each as one line, `stlsplit: error: …`, plus the
   traceback with `-v`. Any other exception is a bug: exit 4 and a request for a report.
 - **Diagnostics** don't stop the run. A stage builds them with `errors.diagnostic(code,
   message, refs)`, which takes the severity from the registry, and returns them with its
   result (stages stay pure). `cli.report_diagnostics` logs them in order and returns
-  `errors.exit_code_for(...)`: 3 if any is `partial`, else 0.
+  `errors.exit_code_for(...)`: 3 if any is `partial`, else 0. The CLI calls it after each
+  stage and keeps the highest code.
 - **Logging:** the `stlsplit` logger writes to stderr; `-q` shows warnings and errors, the
   default adds info, `-v` adds debug messages and the stage timings from `cli.stage(name)`.

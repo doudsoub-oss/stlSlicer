@@ -1,18 +1,24 @@
-"""Reading and writing files: the output-directory policy and the label-font lookup.
+"""Reading and writing files: STL loading, the output-directory policy, the label-font lookup.
 
-With ``cli``, the only module that touches the file system (PLAN.md §3.1). It runs before the
-first pipeline stage (§5.1): ``prepare_output_dir`` applies the output-directory policy
+With ``cli``, the only module that touches the file system (PLAN.md §3.1). ``load_stl`` is the
+first pipeline stage (§5.1): it reads the input STL into the input frame (STL coordinates ×
+``--scale``) for ``repair.prepare``. ``prepare_output_dir`` applies the output-directory policy
 (§7.6), and ``resolve_label_font`` checks the one configuration rule that needs the file
-system (§7.5). STL loading (Phase 2) and writing the outputs (Phase 9) come later.
+system (§7.5). Writing the outputs comes in Phase 9.
 
-Guarantees: ``prepare_output_dir`` never deletes the output directory itself, never deletes a
-name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting.
+Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
+raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
+deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting.
 """
 
 import shutil
 from pathlib import Path
 
-from stlsplit.errors import ConfigError, InputError
+import trimesh
+
+from stlsplit.config import SCALE_WARNING_MAX, SCALE_WARNING_MIN
+from stlsplit.errors import ConfigError, InputError, diagnostic
+from stlsplit.models import Diagnostic
 
 OWNED_OUTPUTS: tuple[str, ...] = (
     "parts",
@@ -24,6 +30,54 @@ OWNED_OUTPUTS: tuple[str, ...] = (
 )
 """Every name stlsplit writes in the output directory, and the only names ``--force`` deletes
 (PLAN.md §7.6). The writer (Phase 9) uses this same constant."""
+
+
+def load_stl(path: Path, scale: float) -> tuple[trimesh.Trimesh, list[Diagnostic]]:
+    """Read an STL file into the input frame (PLAN.md §4.2, Phase 2).
+
+    trimesh merges coincident vertices while loading, so an STL (one separate triangle per
+    facet) comes back connected, and it drops triangles with a non-finite coordinate
+    (docs/LIBRARY_NOTES.md). The file is always read as STL, whatever its extension.
+
+    Args:
+        path: The input file (``INPUT``).
+        scale: Uniform factor applied to every coordinate (``model.scale``); STL has no units
+            and is read as mm.
+
+    Returns:
+        The mesh, mm, input frame; and a W006 diagnostic when its largest dimension is under
+        ``SCALE_WARNING_MIN`` or over ``SCALE_WARNING_MAX`` mm, else no diagnostic.
+
+    Raises:
+        InputError: The file doesn't exist, isn't a file, can't be parsed as STL, or holds no
+            triangle.
+    """
+    if not path.exists():
+        raise InputError(f"INPUT {path}: no such file")
+    if not path.is_file():
+        raise InputError(f"INPUT {path} is not a file")
+    try:
+        mesh = trimesh.load(path, file_type="stl", force="mesh")
+    except Exception as exc:  # trimesh's parsers raise many types on malformed input
+        raise InputError(
+            f"INPUT {path}: can't read it as an STL file ({type(exc).__name__}: {exc})"
+        ) from exc
+    if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+        raise InputError(f"INPUT {path}: no triangles found; is it an STL file?")
+    mesh.apply_scale(scale)  # type: ignore[no-untyped-call]  # unannotated in trimesh
+    size = float(mesh.extents.max())
+    diagnostics = []
+    if size < SCALE_WARNING_MIN or size > SCALE_WARNING_MAX:
+        diagnostics.append(
+            diagnostic(
+                "W006",
+                f"suspicious scale: the model is {size:.6g} mm along its largest side "
+                f"(expected {SCALE_WARNING_MIN:g} to {SCALE_WARNING_MAX:g} mm). STL has no "
+                "units and is read as mm: use --scale to convert (25.4 for inches, 1000 for "
+                "metres)",
+            )
+        )
+    return mesh, diagnostics
 
 
 def prepare_output_dir(path: Path, force: bool) -> None:

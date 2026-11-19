@@ -13,14 +13,16 @@ permissions:
 jobs:
   check:
     # PLAN.md §9.5: 3.12 and 3.13 on Linux, 3.13 on Windows and macOS. 3.14 on Linux was
-    # added in Phase 0 (PLAN.md §2: wheels verified for every dependency).
+    # added in Phase 0 (PLAN.md §2: wheels verified for every dependency). The Linux 3.13 job
+    # also installs the optional deep-repair extra (pymeshlab), so the --deep-repair code and
+    # its spike check run somewhere instead of always being skipped (Phase 2).
     if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: ubuntu-latest, python: "3.12" }
-          - { os: ubuntu-latest, python: "3.13" }
+          - { os: ubuntu-latest, python: "3.13", extras: "dev,deep-repair" }
           - { os: ubuntu-latest, python: "3.14" }
           - { os: windows-latest, python: "3.13" }
           - { os: macos-latest, python: "3.13" }
@@ -32,7 +34,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[${{ matrix.extras || 'dev' }}]"
       - run: python scripts/check.py
 
   weekly-upgrade:
@@ -45,7 +47,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip
-      - run: pip install --upgrade --upgrade-strategy eager -e ".[dev]"
+      - run: pip install --upgrade --upgrade-strategy eager -e ".[dev,deep-repair]"
       - run: pip freeze
       - run: python scripts/api_spike.py
       - run: python scripts/check.py --fast

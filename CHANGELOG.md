@@ -23,3 +23,18 @@ All notable changes to this project are documented here. The format follows
   stlsplit's own outputs and never follows symlinks.
 - Exit codes 0–4 (docs/TROUBLESHOOTING.md): one line per error, the traceback with `-v`;
   logging levels with `-q` and `-v`, stage timings with `-v`.
+- Loading the input STL (any extension; `--scale` applied), with W006 for a model under 1 mm
+  or over 5 m. An empty, unreadable or truncated file exits 1.
+- Try-first repair (ADR-0007): a valid mesh is used as is; otherwise basic repair (W007), then
+  pymeshlab with `--deep-repair` (extra `deep-repair`). A mesh that stays open or
+  non-manifold, or encloses no volume, exits 2 with the open-edge, non-manifold-edge and body
+  counts and what to try next.
+- Shell normalization: overlapping shells are unioned (W010), voids are kept at any depth of
+  nesting (a body loose inside a void too, and overlapping hollow parts keep their walls), and
+  inside-out shells are turned the right way out (W011), even when the whole model is inside
+  out. Basic repair keeps each shell's majority orientation, so one reversed triangle can't
+  fill a void.
+- `--simplify TOL` simplifies the repaired mesh; a tolerance that erases the model exits 1.
+- Split and dry run log a one-line model summary (triangles, bodies, voids, size, volume,
+  repair steps). The input is loaded and repaired before the output directory is touched, so
+  a failing input never creates it and `--force` never deletes the previous outputs for it.

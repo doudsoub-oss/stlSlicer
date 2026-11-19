@@ -13,8 +13,9 @@ stlsplit --calibrate -o ./calibration                    # print once, then pick
 stlsplit --print-config --config my_printer.toml         # show the effective settings
 ```
 
-> **Status (Phase 1):** options are parsed, merged and validated, and the output directory is
-> prepared, but the split, dry run and calibration stop there with a warning. The pipeline
+> **Status (Phase 2):** options are parsed, merged and validated; the split and dry run load
+> and repair the input (`--scale`, `--simplify` and `--deep-repair` take effect), then stop
+> with a warning; the calibration stops after preparing the output directory. The pipeline
 > lands phase by phase (PLAN.md §10).
 
 ## Modes

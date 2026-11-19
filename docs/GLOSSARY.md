@@ -18,6 +18,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Dowel / pin** | A loose cylindrical pin printed separately, lying on its flat. |
 | **Even grid** | The grid that splits each axis into equal cells, the fewest that fit the usable volume. |
 | **Flat** (f) | A small flat along a pin so it lies on the bed, and air and glue can escape. |
+| **Inverted body** | A closed shell whose faces point the wrong way for where it lies (e.g. a body exported inside out); repair turns it the right way out (W011). |
 | **Island** | A tiny region of a cut face (area below 4·π·(d/2)²), penalised when nudging planes. |
 | **Margin** (m) | Space kept free on each side of every axis of the build volume. |
 | **Neg / pos piece** | The piece on the local z < offset side / z > offset side of a cut face. |
@@ -26,9 +27,12 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Piece** | One output part: a body in a cell, ID `X{i}-Y{j}-Z{k}` plus `-a`, `-b` for several bodies. |
 | **Plane-local frame** | Coordinates attached to a cut plane: (u, v) on the plane, z along its normal. |
 | **Polylabel point** | The point of a polygon farthest from its boundary; used to order regions. |
+| **Reference volume** | The volume of the solid after repair, shell normalization and `--simplify`; later volume checks compare against it (invariant I3). |
 | **Region** | A connected part of a cut face (polygon, possibly with holes), in (u, v). |
 | **Safe region** | The region inset by `w + r_h + ch_h`: where a connector's axis may go. |
-| **Shell normalization** | Repair step that unions overlapping shells and keeps internal voids. |
+| **Shell** | One closed, connected surface of a mesh. A solid with a void has two shells: the outer one and the void's. |
+| **Shell normalization** | Repair step that decides from containment and orientation which shells are solids and which are voids, unions overlapping solids, keeps voids at any depth of nesting, and turns inverted bodies the right way out. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
 | **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). |
 | **Usable volume** (U) | The build volume minus twice the margin per axis (minus half a pin in peg mode). |
+| **Void** | An empty space enclosed inside a solid, bounded by an inward-facing shell; repair keeps it. |
