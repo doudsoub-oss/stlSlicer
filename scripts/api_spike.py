@@ -24,6 +24,7 @@ from pathlib import Path
 
 import matplotlib
 import numpy as np
+import shapely
 import trimesh
 from manifold3d import CrossSection, Error, FillRule, JoinType, Manifold, Mesh, Mesh64, OpType
 from matplotlib.font_manager import FontProperties
@@ -215,8 +216,29 @@ def manifold_ray_cast() -> None:
 @check("manifold.min_gap")
 def manifold_min_gap() -> None:
     a = Manifold.cylinder(10.0, 2.7, circular_segments=64)
-    expect(close(a.min_gap(a.translate((7.4, 0.0, 0.0)), 10.0), 2.0), "gap should be 2.0")
+    gap = a.min_gap(a.translate((7.4, 0.0, 0.0)), 10.0)
+    expect(close(gap, 2.0), "gap should be 2.0")
+    # Float noise below the exact value: connectors compare gaps to w with LENGTH_TOLERANCE.
+    expect(abs(gap - 2.0) < 1e-9, f"gap {gap!r} should be within 1e-9 of 2.0")
     expect(a.min_gap(a.translate((1.0, 0.0, 0.0)), 10.0) == 0.0, "crossing solids give 0")
+    expect(a.min_gap(a.translate((50.0, 0.0, 0.0)), 3.0) == 3.0, "beyond the search: its length")
+
+
+@check("manifold.revolve_hole")
+def manifold_revolve_hole() -> None:
+    # geometry.hole_solid revolves the hole's profile instead of uniting a cylinder and a cone:
+    # same solid, vertex at angle 0 like Manifold.cylinder, and no lazy boolean to evaluate.
+    profile = np.array([(0.0, 0.0), (3.1, 0.0), (2.7, 0.4), (2.7, 10.5), (0.0, 10.5)])
+    revolved = Manifold.revolve(CrossSection([profile]), 64)
+    united = Manifold.cylinder(10.5, 2.7, circular_segments=64) + Manifold.cylinder(
+        0.4, 3.1, 2.7, circular_segments=64
+    )
+    expect(revolved.status() == Error.NoError, "the revolved profile should be valid")
+    expect(close(revolved.volume(), united.volume(), 1e-5), "revolve and union should agree")
+    expect(close(revolved.bounding_box()[3], 3.1), "a vertex should lie at angle 0 (+x)")
+    vertices = revolved.to_mesh().vert_properties[:, :3]
+    on_x = np.isclose(vertices[:, 1], 0.0) & np.isclose(vertices[:, 0], 2.7)
+    expect(bool(on_x.any()), "the bore should have a vertex on +x")
 
 
 @check("manifold.simplify")
@@ -577,6 +599,8 @@ def shapely_operations() -> None:
     point = polylabel(square, tolerance=1e-3)
     expect(close(point.x, 5.0, 1e-3) and close(point.y, 5.0, 1e-3), "polylabel at the centre")
     expect(square.contains(Point(5, 5)), "contains")
+    inside = shapely.contains_xy(square, np.array([5.0, 0.0, 10.0]), np.array([5.0, 5.0, 5.0]))
+    expect(inside.tolist() == [True, False, False], "contains_xy should exclude the boundary")
     triangle = Polygon([(5, 5), (15, 5), (15, 15)])
     expect(close(square.intersection(triangle).area, 12.5), "intersection")
 

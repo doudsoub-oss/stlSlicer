@@ -215,6 +215,40 @@ def u_shape() -> Manifold:
     )
 
 
+def wide_u_shape() -> Manifold:
+    """A U extruded 60 mm along Y: a 100 × 10 base (Z 0 to 10) and two 20 mm arms up to Z = 60.
+
+    ``u_shape``'s arms are too thin for a connector. Cut at y = 30, this face is the U itself;
+    inset by the default safe inset (5.1 mm) the base has no room left, so the safe region is
+    one strip in each arm, and both sides of the face are 30 mm deep.
+    """
+    return Manifold.batch_boolean(
+        [
+            Manifold.cube((100.0, 60.0, 10.0)),
+            Manifold.cube((20.0, 60.0, 60.0)),
+            Manifold.cube((20.0, 60.0, 60.0)).translate((80.0, 0.0, 0.0)),
+        ],
+        OpType.Add,
+    )
+
+
+WEDGE_SLOPE = 0.4
+"""How fast the top of ``wedge`` falls behind its cut face, mm per mm along X."""
+
+
+def wedge() -> Manifold:
+    """A block that narrows behind its cut face: the profile below, extruded 40 mm along Z.
+
+    In the XY plane: (0, 0), (80, 0), (80, 24), (40, 40), (0, 40). Cut at x = 40, the face is
+    40 × 40 (u = y, v = z). On the +X side the top falls ``WEDGE_SLOPE`` mm per mm, so near the
+    top a side wall comes within r_h + w = 4.7 mm of a hole whose axis ray still travels more
+    than h(L_max) + w + 1 = 13.5 mm before reaching it (Appendix D).
+    """
+    top = 40.0 - WEDGE_SLOPE * 40.0
+    outline = np.array([(0.0, 0.0), (80.0, 0.0), (80.0, top), (40.0, 40.0), (0.0, 40.0)])
+    return Manifold.extrude(CrossSection([outline]), 40.0)
+
+
 def plinth_step() -> Manifold:
     """A 10 × 10 × 20 box standing on a 40 × 40 × 10 plinth: a step at z = 10, 100 mm² contact."""
     return Manifold.cube((40.0, 40.0, 10.0)) + Manifold.cube((10.0, 10.0, 20.0)).translate(

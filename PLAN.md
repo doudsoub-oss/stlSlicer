@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r7** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r8** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -68,7 +68,7 @@ what surprised you, what to watch.
 | 2 | Load, repair, shell normalization | done | `f7e568d`, `8d8e6d2` (tag `v0.2.0`) | For Phase 3: `cli._run` loads and repairs (`io.load_stl` → `repair.prepare` → body in the **input frame** plus `RepairReport.reference_volume`, measured after `--simplify`), then stops with a "not implemented yet (Phase 3 onwards)" warning: replace that stub with `grid.orient`. Load and repair run before `io.prepare_output_dir` on purpose (a broken input never touches `-o`). The CLI logs each stage's diagnostics as soon as it returns and keeps the highest exit code. Plan changes in Appendix E r5: the review found that the sign-only shell normalization filled voids (whole model inside out; overlapping hollow parts), so roles now come from containment plus relative orientation, any nesting depth; basic repair keeps each shell's majority orientation (trimesh's `fix_winding` follows one reference face). Edge-touching cubes are valid as is; `finned_cube` is the `--deep-repair` fixture. Fixture gotcha: `Manifold.compose` collapses inside-out shells, so build reversed shells with trimesh concatenation (`tests/conftest.py`). pymeshlab is installed only in the Linux 3.13 and weekly CI jobs; locally `pip install -e ".[dev,deep-repair]"`. Its filter plugins need the system's `libOpenGL.so.0` (Ubuntu: `libopengl0`, installed in CI); without it `geometry.deep_repair_problem()` makes `--deep-repair` exit 2 with that cause instead of crashing (`8d8e6d2`). |
 | 3 | Orientation and even grid | done | `b354c40`, `f63cee3` (tag `v0.3.0`) | For Phase 4: `cli._run` now runs `grid.orient` → `grid.even_grid` after repair, then stops with a "not implemented yet (Phase 4 onwards)" warning: replace that stub with `cutting.split_cells`. From there `body` is in the **cutting frame** (bounding-box minimum exactly at the origin, LIBRARY_NOTES `manifold.signed_permutation_exact`) and `layout` is the `Grid`; `grid.axis_bounds`, `grid.cell_indices` (sorted (i, j, k)) and `grid.cell_bounds` give the cells. `Orientation.input_to_cutting` (4×4, tuples) is for `assembly.json` in Phase 9. Plan changes in Appendix E r6: the cell-fit check is relative (`≤ U · (1 + GRID_TOLERANCE)`; the absolute `U + 1e-9` contradicted the count's relative slack) and, after the review, evaluated in the count's own arithmetic (`grid.fits`: `size / U − tol ≤ 1`), since `size <= U * (1 + tol)` rounded the other way for one float and a valid box exited 4 (`f63cee3`); use `grid.fits` whenever nudging (Phase 6) checks a cell; the six rotations and their tie order are in `grid.ROTATIONS`; `Orientation` lives in `models`; the dry-run plan goes to stdout (`cli.dry_run_report`, extend it as stages land), logs to stderr. First hypothesis tests: `tests/conftest.py` loads a derandomized `ci` profile when `CI` is set. `chiral_l` is a three-armed corner, not a flat L (a flat L is its own mirror image). The grid has no upper bound on the cell count (a 5 m model on a tiny bed): Phase 10 territory. |
 | 4 | Sections, cutting, cut faces, small-piece merge | done | `2180729` | For Phase 5: `cli._run` now runs `cutting.cut` after the grid (pieces, faces, W004/W005/W008; I1 and I3 checked, `AssertionError` = exit 4), then stops with a "not implemented yet (Phase 5 onwards)" warning: replace that stub with `connectors.place`. Faces are `models.CutFace` with the region in plane-local (u, v), from the normalized body (ADR-0002); `geometry.section`, `polylabel_point`, `shadow`, `grow`, `prism`, `rectangle`, `bodies`, `split_at` and `clip` are there to reuse. Pieces without faces (W008) get no connectors. **Cut solids only by difference** (`geometry.split_at`, `geometry.clip`): `split_by_plane`, `trim_by_plane` and `^` leave a zero-thickness flap where a model face lies on the cut (spike `manifold.coplanar_cuts`); this matters for Phase 7's booleans too. Plan changes in Appendix E r7: a merged piece is cut again from the body, never glued (a union of split halves keeps an internal face when the plane passes through mesh vertices; spike `manifold.union_of_split_halves`); bodies keep their voids (`decompose()` returns voids as separate inside-out shells); `geometry.reverse_winding` now goes through `Mesh64` (float64); `cutting` imports `grid`; three bugs found by the review (flaps, merged body picked by volume, prisms reaching other cells), fixed and tested. Performance: `polylabel` at 1e-3 mm is slow on thin regions (about 30 ms for a 2 mm ring); `geometry.polylabel_point` caches it, which took the hollow sphere on 27 cells from 3.4 s to 0.4 s. The merge (booleans on two cells) and polylabel are the hot spots to watch in Phase 10. |
-| 5 | Connector placement | todo | | |
+| 5 | Connector placement | done | `f935d6f` | For Phase 6: `cli._run` now runs `connectors.place` after the cutting, then stops with a "not implemented yet (Phase 6 onwards)" warning. Nudging goes between `grid.even_grid` and `cutting.cut`; its scores can use `geometry.cut_region` and `connectors.safe_region(region, cfg)` (a `MultiPolygon`, possibly empty). `grid` may import `connectors`: it imports only `geometry`, `config`, `errors` and `models`. For Phase 7: cut the holes with `geometry.hole_solid` (bore r_h plus mouth chamfer, radii compensated), the shape the collision check used; `connectors.hole_solids(connector, face, cfg)` gives them per piece; a peg stands on the neg piece (`hole_depth_neg = 0`). Plan changes in Appendix E r8: face order, not ID string order; farthest-point sampling from the accepted connectors; at most 256 trials per face (`MAX_CANDIDATE_TRIALS`); `connectors.length` ≤ max(bed X, bed Y) (a bound by U would have broken the margin boundary test); depths measured from the face; `min_gap` compared with `LENGTH_TOLERANCE` (it gives 1.999999999999993 for 2 mm); W002 once per face; `wide_u_shape` fixture. **manifold3d booleans are lazy**: the cost shows at the first query (a cylinder-plus-cone union cost 3 ms there), so holes are revolved (0.14 ms), and `_too_close` checks bounding boxes and a ray cast along the axis before `min_gap` (2 ms on crossing solids). Performance: placement takes 1.5 s on the 2×2×2 cube (541 trials for 48 connectors). The review found no correctness bug, and one item for Phase 10: the containment fallback tries every standard length, so with `pin_length_step = 0.1` and a 60 mm pin (451 lengths) a rejected candidate costs about 330 ms and a face where all 256 trials fail about 84 s. A binary search over the lengths would fix it, but take care at the 1e-6 tolerance edge, where containment isn't monotonic in L. |
 | 6 | Plane nudging | todo | | |
 | 7 | Tool solids, booleans, dowels, calibration kit | todo | | |
 | 8 | Labels | todo | | |
@@ -504,6 +504,9 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 | ε | Half-thickness of the section probe | `advanced.section_epsilon` | 0.01 |
 | ε_ray | Ray start offset inside a piece | constant `RAY_START_OFFSET` | 0.01 |
 | keep-out | Label keep-out radius around a connector | `r_h + ch_h + w` | 5.1 |
+| r_probe | Radius of the circle of depth rays and of the containment cylinder (r8) | `r_h + w` | 4.7 |
+| ray length | Length of the depth rays (r8) | `h(L_max) + w + RAY_LENGTH_MARGIN` (1 mm) | 13.5 |
+| T_max | Candidates of a face that go through the 3D checks at most (r8) | constant `MAX_CANDIDATE_TRIALS` | 256 |
 | t_lab | Label engraving depth | `labels.depth` | 0.6 |
 | H_min, H_max | Label text height range | `advanced.label_min_height`, `advanced.label_max_height` | 4.0, 12.0 |
 | V_small | Small-piece volume threshold | `advanced.small_piece_volume` | 500 mm³ |
@@ -629,7 +632,8 @@ the key.
 - `bed`: three values > 0. `margin` ≥ 0 and `2·margin` < the smallest bed dimension.
 - `scale` > 0. `simplify` ≥ 0.
 - `diameter` > 0, `clearance` ≥ 0, `min_wall` > 0, `max_per_face` ≥ 1.
-- `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin).
+- `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin), and
+  `length` ≤ max(bed X, bed Y): pins are printed lying down (r8).
 - `labels.depth` > 0 and < `min_wall`.
 - Peg mode: every `U_i − L_max/2` > 0.
 - Advanced: `axial_play` ≥ 0; `pin_length_step` ≥ 0.1; `pin_min_length_factor` > 0;
@@ -1334,16 +1338,20 @@ least `min_wall` of material around every hole and between any two holes of the 
 4. Trial order:
    - k = 1: polylabel of the largest part first, then the other candidates by decreasing distance
      to the safe boundary.
-   - k ≥ 2: the farthest-apart pair first (the hull diameter), then farthest-point sampling.
+   - k ≥ 2: the farthest-apart pair first (the hull diameter), then farthest-point sampling:
+     the untried candidate farthest from the connectors accepted on this face, or from the
+     tried candidates while none is accepted (r8).
    - Ties go to the lexicographic order of (u, v).
    - Skip a candidate closer than s_min to a connector already accepted on this face.
+   - At most T_max candidates per face go through the 3D checks (r8).
 5. 3D checks for each candidate, on the sides that need a hole (both for dowels, the pos side only
    for pegs):
    1. **Depth.** Cast 9 rays per side with `geometry.ray_depth`: one on the axis and 8 on a circle of
       radius r_h + w.
       - Each ray starts ε_ray inside the piece, points along the inward normal, and is
         h(L_max) + w + 1 mm long.
-      - Available depth = the smallest first-hit depth minus w, or "enough" if no ray hits.
+      - Available depth = the smallest first-hit depth, measured from the face (r8), minus w,
+        or "enough" if no ray hits.
       - **Never start a ray exactly on the face.** Whether the face itself is reported depends on
         the library: trimesh reports it at distance 0, which would reject every candidate, while
         manifold3d didn't at plan time. Starting inside the piece makes this irrelevant.
@@ -1356,14 +1364,16 @@ least `min_wall` of material around every hole and between any two holes of the 
       - This catches pieces that narrow behind the face, which the rays can miss.
       - Cost at plan time: 14 ms per check on a 524k-triangle piece.
    4. **Collisions.** `min_gap(this hole tool, every hole tool already accepted in the same piece)`
-      must be ≥ w (search length w + 1). Otherwise reject the candidate.
+      must be ≥ w (search length w + 1), up to `LENGTH_TOLERANCE`. Otherwise reject the
+      candidate. The hole tool is `geometry.hole_solid`, mouth chamfer included, the shape
+      Phase 7 cuts (r8).
       - This catches holes on perpendicular faces near a shared edge. In the review's 2×2×2 cube
         simulation, their axes crossed at 0 mm.
       - It also catches coaxial holes drilled from opposite faces of a thin piece.
    5. **Accept.** Record the connector with its L and the hole depth h(L) on each side (0 on the
       peg side).
-6. Process faces in face-ID order and accept connectors in trial order, so the result is
-   deterministic.
+6. Process faces in face order (`cutting.cut_faces`; not ID string order, r8) and accept
+   connectors in trial order, so the result is deterministic.
 7. Diagnostics:
    - W002 when L < L_max;
    - W009 when a face ends up with exactly one connector;
@@ -1895,11 +1905,53 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `plinth_step` | 10 × 10 × 20 box on a 40 × 40 × 10 plinth | Contact region at a step |
 | `overhang_step` | 40 × 40 × 10 plate on a 10 × 10 × 10 column | Contact region, other step direction |
 | `knob` | Box with a small knob crossing a plane | Small-piece merge |
-| `u_shape` | U-shaped extrusion | Connectors in both arms |
-| `wedge` | A piece that narrows behind its cut face | Depth and containment checks |
+| `u_shape` | U-shaped extrusion, 10 mm arms | One polygon per U-shaped region |
+| `wide_u_shape` | U-shaped extrusion, 20 mm arms on a 10 mm base, 60 mm deep (r8) | Connectors in both arms |
+| `wedge` | 40 mm block whose top falls 0.4 mm per mm behind its cut face at x = 40 | Depth and containment checks |
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r8 — 2026-11-19 (Phase 5).** Found while planning and implementing Phase 5, agreed with the
+maintainer:
+
+- **Face order, not face-ID order** (task 6): faces are processed in the order
+  `cutting.cut_faces` returns them, as "ID order" for pieces became piece order in r7; sorted
+  ID strings put `X10-…` before `X2-…`.
+- **Farthest-point sampling after a rejection** (task 4): the next trial is the untried
+  candidate farthest from the connectors accepted on the face, or from the tried candidates
+  while none is accepted. A rejection is then followed by its neighbours, so the connectors
+  stay spread out.
+- **At most T_max = 256 candidates per face** go through the 3D checks
+  (`MAX_CANDIDATE_TRIALS`). A 210 mm face has 25 000 candidates, and the containment boolean
+  costs up to 7 ms on a dense mesh, so a face where everything fails could take minutes; after
+  256 it gets W001, whose message says so.
+- **`connectors.length` ≤ max(bed X, bed Y)** (§7.5): it had no upper bound (Phase 1 notes),
+  so a huge `--dowel-length` made `derived()` build millions of standard lengths. Pins are
+  printed lying down, so they must fit the bed plate. The planned bound, by U, would have made
+  any margin near half the bed invalid (U = 0.2 mm on a 220 mm bed with a 109.9 mm margin,
+  a boundary the margin rule accepts and a test checks).
+- **Hole tool with its chamfer** (task 5.4): the collision check uses `geometry.hole_solid`,
+  the bore plus the mouth chamfer, the solid Phase 7 cuts: a chamfer near a shared edge takes
+  up to ch_h off the wall. Holes are built by revolving their profile: manifold3d evaluates
+  booleans lazily, and a cylinder-plus-cone union cost 3 ms at its first query, against
+  0.14 ms (spike check `manifold.revolve_hole`).
+- **Float noise in `min_gap`**: two holes exactly 2 mm apart give 1.999999999999993, so the
+  gap is compared to w − `LENGTH_TOLERANCE`. Two shortcuts give the same answer faster: bounding
+  boxes w apart mean far enough, and an axis meeting the other hole (a ray cast) means they
+  cross; `min_gap` costs 2 ms on crossing solids.
+- **Depths are measured from the face** (task 5.1): the ray starts ε_ray inside, and that
+  offset is added back, so 12 mm behind the face gives the available depth 10 of the tests.
+- **New §6.1 values:** r_probe = r_h + w (4.7) and the ray length h(L_max) + w + 1 (13.5) are
+  in `derived()`; the 8 circle rays, the 1 mm margins of the rays and of the `min_gap`
+  search, and T_max are named constants.
+- **W002 once per face**, listing its shortened connectors and their lengths, rather than once
+  per pin.
+- **Fixtures:** `u_shape`'s 10 mm arms have no room for a connector (inset 5.1 on each side),
+  so "connectors in both arms" uses `wide_u_shape` (20 mm arms); `wedge` is specified in
+  Appendix D.
+- **The CLI runs the placement** after the cutting; the dry run lists every connector and the
+  pins by diameter and length (§7.1).
 
 **r7 — 2026-11-19 (Phase 4).** Found while planning and implementing Phase 4, agreed with the
 maintainer:

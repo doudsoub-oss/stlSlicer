@@ -5,7 +5,8 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | Term | Meaning |
 |---|---|
 | **Assembly step** | One join in the assembly order: a sub-assembly moved along one axis onto another (`assembly.md`). Numbered `stage.join`, e.g. `2.3`. |
-| **Axial play** (a) | Extra hole depth beyond each pin end: room for glue, and the pin never bottoms out. |
+| **Axial play** (a) | Extra hole depth beyond each pin end: each hole is h(L) = L/2 + a deep (10.5 mm for a 20 mm pin), so there is room for glue and the pin never bottoms out. |
+| **Candidate** | A possible connector axis point on a face: a point of the g = d/4 grid inside the safe region, or a part's polylabel point. Candidates are tried in a fixed order until enough pass the 3D checks. |
 | **Body** | One connected solid: an outer shell with the voids it holds. A grid cell can contain several bodies; each becomes a piece. |
 | **Calibration kit** | Two small bars with holes of increasing clearance, printed once to choose `--clearance`. |
 | **Cell** | One box of the grid, indexed (i, j, k) from 0 along X, Y, Z. Its sides lie between consecutive planes (or 0 and the model's extent), and it fits the usable volume. |
@@ -30,11 +31,11 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Polylabel point** | The point of a polygon farthest from its boundary; used to order regions. |
 | **Reference volume** | The volume of the solid after repair, shell normalization and `--simplify`; later volume checks compare against it (invariant I3). |
 | **Region** | The area of a cut face: a polygon, possibly with holes, in the plane's (u, v), where the model is solid on both sides of the plane (`slice(o − ε) ∩ slice(o + ε)`), clipped to the two cells. |
-| **Safe region** | The region inset by `w + r_h + ch_h`: where a connector's axis may go. |
+| **Safe region** | The region of a cut face inset by `w + r_h + ch_h` (5.1 mm by default): where a connector's axis may go, so the hole and its chamfer keep a wall of w on the face. The 3D checks then make sure the wall also holds behind the face. |
 | **Section** | Where a plane cuts the model or a piece: polygons in the plane's (u, v). A single section is one-sided when a model face lies on the plane, so cut faces use two sections at ± ε. |
 | **Shell** | One closed, connected surface of a mesh. A solid with a void has two shells: the outer one and the void's. |
 | **Shell normalization** | Repair step that decides from containment and orientation which shells are solids and which are voids, unions overlapping solids, keeps voids at any depth of nesting, and turns inverted bodies the right way out. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
-| **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). |
+| **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). A connector takes the longest one whose holes fit the material behind the face on both sides; shorter than L_max gives W002. |
 | **Usable volume** (U) | The space a piece may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode because pegs stick out of their piece. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |
 | **Void** | An empty space enclosed inside a solid, bounded by an inward-facing shell; repair keeps it. |

@@ -58,3 +58,13 @@ All notable changes to this project are documented here. The format follows
   into the piece they touch when the merged piece still fits and can be put in place with one
   straight move (W005); otherwise they stay on their own with the reason (W004). Pieces
   without a cut face are reported (W008).
+- Connector placement: every cut face gets up to `--max-connectors-per-face` dowel positions
+  (two whenever two fit, so the pieces can't rotate), spread out over the face and kept
+  `--min-wall` from its edges. Each hole is checked in 3D: enough material behind the face on
+  both sides (otherwise the longest standard pin that fits, W002), a wall all around it further
+  in, and `--min-wall` from the holes of the piece's other faces. A face without room gets
+  W001 (exit 3), a face with a single connector W009. With `--connector peg`, only the hole
+  side is checked. The log shows `connectors: 8 on 2 of 2 cut faces`; `--dry-run` lists every
+  connector (position, pin length, hole depths) and the pins to print by diameter and length.
+- `--dowel-length` can't exceed the longer side of the bed plate, max(bed X, bed Y): pins are
+  printed lying down (exit 1 otherwise, naming the option).

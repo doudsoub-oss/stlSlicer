@@ -312,7 +312,104 @@ beside it, it stays on its own (W004). A small piece between two pieces, one tha
 the merged piece 105 mm on U = 102, and one that already absorbed another all give W004.
 
 ## Connector placement
-TODO (Phase 5)
+
+Decides where the connectors of every cut face go and how long their pins are. Input: the
+pieces and cut faces from the cutting stage. Output: `Connector`s (ID `{face}/c{n}`, kind,
+axis point (u, v), d, pin length L, hole depth on each side) and the diagnostics W001, W002
+and W009. Code: `connectors.place` and the functions below; every number is in PLAN.md §6.
+The values in brackets are the defaults (d = 5, c = 0.2, w = 2, ch_h = 0.4, L_max = 20).
+
+Faces are processed in **face order** (by plane, neg cell, polylabel point: the order of
+`cutting.cut_faces`, not the order of the ID strings), and each face's candidates in its
+trial order. A hole accepted on one face constrains the faces processed after it.
+
+**1. Safe region** (`safe_region`): the region inset by `w + r_h + ch_h` [5.1 mm], with round
+joins. An axis inside it leaves a wall of w around the hole and its mouth chamfer on the
+face. A 40 × 40 face keeps 29.8 × 29.8 = 888 mm²; the 2 mm ring of the hollow sphere keeps
+nothing, so it gets W001 (no room). The inset can split a region: a U whose 10 mm base has
+no room keeps one strip per arm.
+
+**2. Candidates** (`candidates`): the points (i·g, j·g) [g = d/4 = 1.25 mm] strictly inside
+the safe region (shapely's `contains_xy` excludes the boundary), plus the polylabel point of
+each part, without duplicates, sorted by (u, v).
+
+**3. Count** (`connector_count`):
+- 0 without candidates;
+- 1 if no two candidates are at least s_min [3d = 15 mm] apart, checked on the diameter of
+  their convex hull;
+- otherwise `clamp(floor(area(safe) / A), 2, k_max)` [A = (6d)² = 900 mm², k_max = 4].
+
+**Two connectors whenever two fit**: a single round pin lets the pieces rotate. The 40 × 40
+face (888 mm² < A) still aims for 2; a 100 × 100 face (8064 mm²) for 4. k_max = 1 gives 1.
+
+**4. Trial order** (`select`); ties always go to the (u, v) order of the candidates:
+- k = 1: the polylabel point of the largest part first, then the other candidates by
+  decreasing distance to the safe region's boundary.
+- k ≥ 2: the farthest-apart pair first (the hull diameter), then farthest-point sampling: the
+  untried candidate **farthest from the accepted connectors**, or from the tried candidates
+  while none is accepted. A rejected candidate is thus followed by its neighbours, and the
+  connectors stay spread out (PLAN.md Appendix E, r8). A candidate closer than s_min to an
+  accepted connector is never tried: when the farthest one is, so are all the others, and the
+  face stops there.
+- At most `MAX_CANDIDATE_TRIALS` [256] candidates per face go through the 3D checks; a face
+  whose first 256 all fail gets W001, which says so.
+
+On the 100 × 100 face the order is (6.25, 6.25), (93.75, 93.75), (6.25, 93.75),
+(93.75, 6.25): both diagonals are diameters, and the first in (u, v) order wins.
+
+**5. 3D checks** (`check_candidate`, ADR-0014), on each side that needs a hole: both for
+dowels; for pegs only the pos side, since the peg stands on the neg piece.
+
+1. **Depth** (`available_depth`). Nine rays: one on the axis and eight on a circle of radius
+   `r_h + w` [4.7 mm] around it (`RAY_CIRCLE_COUNT`). Each starts `RAY_START_OFFSET`
+   [0.01 mm] inside the piece and runs along the inward normal for `h(L_max) + w + 1`
+   [13.5 mm]. Never start a ray on the face: whether the face itself is reported depends on
+   the library (trimesh reports it at 0, manifold3d doesn't). Depths are measured **from the
+   face** (the offset added back), and the available depth is the smallest one minus w, or
+   "enough" if no ray hits. 12 mm of material behind the face gives 10.
+2. **Pin length** (`lengths_that_fit`): the standard lengths [20, 18, 16] whose hole depth
+   `h(L) = L/2 + a` [10.5, 9.5, 8.5] is at most the available depth on every side, longest
+   first. With 10 mm available, 20 doesn't fit and 18 does (W002); with 4 mm, none (W001).
+3. **Exact containment** (`fits_inside`): a cylinder of radius `r_h + w` (flats at that
+   radius) from the face to depth `h(L) + w` must lie inside the piece, up to 1e-6 of its
+   volume. If it doesn't, try the next shorter L; if none passes, reject the candidate. This
+   catches pieces that narrow behind the face between the rays: a small void 4.1 mm from the
+   axis, between two rays, fails it.
+4. **Collisions**: each new hole (`geometry.hole_solid`: radius r_h, mouth chamfer ch_h,
+   depth h(L), the shape the tools will cut in Phase 7) must be at least w from every hole
+   already accepted in the same piece (`min_gap`, searching up to w + 1 mm), up to
+   `LENGTH_TOLERANCE` (`min_gap` gives 1.999999999999993 for a gap of exactly 2). Otherwise
+   the candidate is rejected (not shortened). This catches holes on perpendicular faces near a
+   shared edge, whose axes cross at 0 mm in a 2 × 2 × 2 grid, and coaxial holes drilled from
+   opposite faces of a thin piece. Two shortcuts give the same answer faster: bounding boxes
+   w apart mean far enough, and an axis that meets the other hole (one ray cast) means the
+   holes cross; `min_gap` costs 2 ms on crossing solids against 0.15 ms otherwise.
+5. **Accept**: the connector records L and h(L) on each side (0 on a peg's side); its holes
+   join the piece's list for the later checks.
+
+**6. Diagnostics**, per face in face order: **W001** when the face has no connector (no
+room, or every candidate tried failed the checks), otherwise **W002** when some pins are
+shorter than L_max (one diagnostic listing them) and **W009** when there is exactly one.
+
+**7. Invariants.** Every axis point lies strictly inside its face's safe region (I6, asserted:
+`AssertionError`, exit 4). No two holes of a piece are closer than w (I5, by the collision
+check; tested on the 2 × 2 × 2 cube and the 3 × 3 × 3 grid of 15 mm pieces).
+
+Holes are built by revolving their profile, not as a union of a cylinder and a cone:
+manifold3d evaluates booleans lazily, and that union costs about 3 ms at its first query
+against 0.14 ms for the revolve (docs/LIBRARY_NOTES.md). On the 2 × 2 × 2 cube, placement
+tries 541 candidates for 48 connectors in about 1.5 s (3.8 s with the union).
+
+Examples: a 200 × 100 × 100 box cut once gives 4 connectors in the corners of the safe
+region; an 80 × 40 × 40 box gives 2 on the diagonal; a 45 mm cube on a 30³ bed (15 mm pieces)
+gives one connector on 13 faces (W009) and none on the other 41 (W001), because the holes of
+a 15 mm piece collide.
+
+Tests: `tests/unit/test_placement.py` (safe region, candidates, count rule, trial order,
+trial cap, standard lengths), `tests/integration/test_connectors.py` (the 100 and 40 mm
+faces, the ring, the U, the `wedge`, a void between the rays, 12 and 6 mm behind the face,
+the 2 × 2 × 2 cube, 15 mm pieces, pegs, `--connector none`), `tests/unit/test_geometry.py`
+(holes).
 
 ## Plane nudging
 TODO (Phase 6)

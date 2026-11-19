@@ -140,6 +140,8 @@ def test_derived_values_match_plan_section_6() -> None:
     assert d.area_per_connector == 900.0
     assert d.island_area == pytest.approx(78.54, abs=0.01)
     assert d.label_keep_out == pytest.approx(5.1)
+    assert d.probe_radius == pytest.approx(4.7)
+    assert d.ray_length == pytest.approx(13.5)
 
 
 def test_peg_mode_reduces_the_usable_volume_by_the_protrusion() -> None:
@@ -301,6 +303,12 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
             "connectors.length",
             ">= L_min = pin_min_length_factor x diameter = 15.0",
             id="length-vs-l-min",
+        ),
+        pytest.param(
+            {"connectors.length": 220.5},
+            "connectors.length",
+            "<= the longer side of the bed plate, max(bed X, bed Y) (220.0)",
+            id="length-vs-bed",
         ),
         pytest.param({"labels.depth": 0.0}, "labels.depth", "> 0", id="label-depth"),
         pytest.param(
@@ -495,6 +503,15 @@ def test_validation_rejects_bad_value(overrides: dict[str, Any], key: str, rule:
         pytest.param(
             {"connectors.type": "peg", "printer.bed": (100.0, 10.1, 100.0), "printer.margin": 0.0},
             id="peg-mode-just-fits",
+        ),
+        pytest.param({"connectors.length": 220.0}, id="length-equals-the-bed-side"),
+        pytest.param(
+            {
+                "printer.bed": (100.0, 300.0, 20.0),
+                "printer.margin": 0.0,
+                "connectors.length": 300.0,
+            },
+            id="length-uses-the-longer-bed-side-not-z",
         ),
     ],
 )
