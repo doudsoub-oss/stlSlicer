@@ -522,7 +522,7 @@ def section(body: Manifold, axis: Axis, offset: float) -> MultiPolygon:
     return MultiPolygon(_polygons(_to_local(body, axis).slice(offset)))
 
 
-def cut_region(body: Manifold, plane: Plane, eps: float) -> list[Polygon]:
+def cut_region(body: Manifold, plane: Plane, eps: float, ordered: bool = True) -> list[Polygon]:
     """Return the contact region between the two sides of a cut plane.
 
     The region is the intersection of the slices at ``plane.offset - eps`` and
@@ -535,18 +535,21 @@ def cut_region(body: Manifold, plane: Plane, eps: float) -> list[Polygon]:
             must see the same region).
         plane: The cut plane.
         eps: Half-thickness of the probe, mm (``advanced.section_epsilon``).
+        ordered: Sort the polygons by their polylabel point. Plane nudging only counts them
+            and passes False: polylabel takes about 30 ms on a thin ring.
 
     Returns:
         Connected polygons with holes, in plane-local (u, v) coordinates
-        (docs/ARCHITECTURE.md, "Frames"), sorted by their polylabel point.
+        (docs/ARCHITECTURE.md, "Frames"), sorted by their polylabel point; in
+        ``decompose()`` order when not ``ordered``.
     """
     local = _to_local(body, plane.axis)
     contact = local.slice(plane.offset - eps) ^ local.slice(plane.offset + eps)
-    return crosssection_to_polygons(contact)
+    return crosssection_to_polygons(contact) if ordered else _polygons(contact)
 
 
 def clip_to_cells(
-    polygons: Iterable[Polygon], axis: Axis, cell_a: Box, cell_b: Box
+    polygons: Iterable[Polygon], axis: Axis, cell_a: Box, cell_b: Box, ordered: bool = True
 ) -> list[Polygon]:
     """Clip regions to the rectangle two cells adjacent across a plane share in that plane.
 
@@ -555,11 +558,13 @@ def clip_to_cells(
         axis: Plane axis; the cells are adjacent along it.
         cell_a: One cell's box, cutting frame (``grid.cell_bounds``).
         cell_b: The other cell's box.
+        ordered: Sort the result by polylabel point (False for plane nudging, which only
+            counts the polygons; see ``cut_region``).
 
     Returns:
         The clipped regions split into connected polygons, without parts of
         ``AREA_TOLERANCE`` or less (float slivers, or a region that only touches the
-        rectangle), sorted by their polylabel point.
+        rectangle), sorted by their polylabel point; in input order when not ``ordered``.
     """
     u_axis, v_axis, _ = _LOCAL_AXES[axis]
     u0, v0 = max(cell_a[0][u_axis], cell_b[0][u_axis]), max(cell_a[0][v_axis], cell_b[0][v_axis])
@@ -573,7 +578,7 @@ def clip_to_cells(
         for part in polygon_parts(polygon.intersection(rectangle))
         if part.area > AREA_TOLERANCE
     ]
-    return sorted_by_polylabel(parts)
+    return sorted_by_polylabel(parts) if ordered else parts
 
 
 def polygon_parts(shape: BaseGeometry) -> list[Polygon]:

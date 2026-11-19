@@ -1,10 +1,11 @@
-"""Orientation, cutting frame and even grid.
+"""Orientation, cutting frame, even grid and plane nudging.
 
-Third stage of the pipeline (PLAN.md §5.1), after ``repair.prepare``. ``orient`` picks the
-proper rotation that needs the fewest cells (auto-orient, ADR-0008) and moves the model into
-the cutting frame, its bounding-box minimum at the origin (§4.2). ``even_grid`` then splits
-each axis into the fewest equal cells that fit the usable volume U (ADR-0003). Plane nudging
-arrives in Phase 6.
+Third stage of the pipeline (PLAN.md §5.1), after ``repair.prepare`` and before
+``cutting.cut``. ``orient`` picks the proper rotation that needs the fewest cells
+(auto-orient, ADR-0008) and moves the model into the cutting frame, its bounding-box minimum
+at the origin (§4.2). ``even_grid`` then splits each axis into the fewest equal cells that fit
+the usable volume U, and ``nudge`` moves each plane within a small window to a position whose
+cut regions have room for connectors and no tiny islands (ADR-0003).
 
 Pure: geometry and numbers in, geometry and numbers out. U comes from ``config.derived``
 (bed − 2·margin, minus L_max/2 in peg mode; ADR-0005); it is never recomputed here.
@@ -13,26 +14,38 @@ Guarantees:
 - Every rotation is a signed permutation with det = +1: the model is never mirrored.
 - The oriented body's bounding box starts exactly at (0, 0, 0).
 - Every cell fits U: its size along axis a is at most ``U_a · (1 + GRID_TOLERANCE)``, checked
-  by ``fits`` in the same arithmetic as ``cell_count``.
+  by ``fits`` in the same arithmetic as ``cell_count``, before and after nudging.
 - Each axis has the fewest cells that fit: n − 1 even cells would each be larger than U.
+- Nudging moves a plane by a whole number of steps within the window, keeps it strictly
+  between its neighbours, and leaves it where it is unless moving gains something.
 """
 
 import itertools
+import logging
 import math
+from collections.abc import Callable, Iterable
+from dataclasses import replace
 from typing import NamedTuple
 
 import numpy as np
 from manifold3d import Manifold
+from shapely.geometry import Polygon
 
-from stlsplit import config
+from stlsplit import config, connectors, geometry
 from stlsplit.config import GRID_TOLERANCE, Config
 from stlsplit.errors import diagnostic
 from stlsplit.models import Axis, Diagnostic, Grid, Orientation, Plane
 
+LOGGER = logging.getLogger(__name__)
+
 Vec3 = tuple[float, float, float]
 """A value per cutting-frame axis (X, Y, Z), mm."""
 
+CellIndex = tuple[int, int, int]
+"""A cell (i, j, k), 0-based along X, Y, Z (§4.3)."""
+
 _AXES: tuple[Axis, Axis, Axis] = (0, 1, 2)
+_AXIS_NAMES = "XYZ"
 
 
 class Rotation(NamedTuple):
@@ -227,19 +240,291 @@ def even_grid(extent: Vec3, usable: Vec3) -> tuple[Grid, tuple[Diagnostic, ...]]
         ),
         extent=extent,
     )
-    for axis in _AXES:  # task 5: every cell fits U
-        bounds = axis_bounds(layout, axis)
-        largest = max(high - low for low, high in itertools.pairwise(bounds))
-        # One cell: the count's own expression, so never over. n ≥ 2: the slack leaves a
-        # margin of GRID_TOLERANCE · (1 − 1/n) ≥ 5e-10 for the rounding of k · extent / n.
-        if not fits(largest, usable[axis]):
-            raise AssertionError(f"a cell is {largest} mm along axis {axis}, over U = {usable}")
+    # Task 5: every cell fits U. One cell: the count's own expression, so never over. n ≥ 2:
+    # the slack leaves a margin of GRID_TOLERANCE · (1 − 1/n) ≥ 5e-10 for the rounding of
+    # k · extent / n.
+    check_fits(layout)
     if layout.counts != (1, 1, 1):
         return layout, ()
     size = " x ".join(f"{value:g}" for value in usable)
     return layout, (
         diagnostic("W012", f"the model already fits the usable volume ({size} mm): nothing to cut"),
     )
+
+
+def check_fits(layout: Grid) -> None:
+    """Check that every axis' planes increase strictly and every cell fits U (``fits``).
+
+    Args:
+        layout: The grid, even or nudged.
+
+    Raises:
+        AssertionError: A cell has no size or doesn't fit U, a bug (exit 4).
+    """
+    for axis in _AXES:
+        bounds = axis_bounds(layout, axis)
+        sizes = [high - low for low, high in itertools.pairwise(bounds)]
+        if min(sizes) <= 0:
+            raise AssertionError(f"the cell bounds along axis {axis} don't increase: {bounds}")
+        largest = max(sizes)
+        if not fits(largest, layout.usable[axis]):
+            raise AssertionError(
+                f"a cell is {largest} mm along axis {axis}, over U = {layout.usable}"
+            )
+
+
+# --- plane nudging (PLAN.md Phase 6, ADR-0003) ------------------------------------------------
+
+
+class PlaneScore(NamedTuple):
+    """The score of a plane position: its cut regions, compared as a tuple (lower is better).
+
+    Attributes:
+        no_room: How many regions have an empty safe region (``connectors.safe_region``): no
+            connector can go there (W001).
+        islands: How many regions are tiny islands: area under ``derived(cfg).island_area``
+            (4 · π · (d/2)², 78.5 mm² by default).
+    """
+
+    no_room: int
+    islands: int
+
+
+_PERFECT = PlaneScore(no_room=0, islands=0)
+
+
+def nudge(body: Manifold, layout: Grid, cfg: Config) -> Grid:
+    """Move each plane within the nudge window to a better position (PLAN.md Phase 6).
+
+    Planes are taken in axis order X, Y, Z, then by increasing offset, one after the other.
+    Each is scored on the grid as the planes before it left it, so a move changes the slack of
+    the planes after it (task 3). ``candidate_shifts`` gives the moves that keep both
+    neighbouring cells within U, ``plane_regions`` and ``score_regions`` score each position,
+    and ``choose_shift`` keeps the one with the lowest (no room, tiny islands, |δ|, δ): a plane
+    stays where it is unless moving gains something (ADR-0003).
+
+    There is deliberately no rule keeping planes away from mesh vertices or model faces:
+    manifold3d splits through vertices, and ``geometry.cut_region`` handles a model face lying
+    on the plane (ADR-0002). A "no vertex within 0.01 mm" rule never terminates on a dense mesh
+    (task 5).
+
+    Args:
+        body: The normalized body, mm, cutting frame (from ``orient``).
+        layout: The grid (from ``even_grid``).
+        cfg: The configuration: ``advanced.nudge_step`` (δ_n), ``derived(cfg).nudge_steps``
+            (W_n / δ_n, at most 100; 0 turns nudging off), ``advanced.section_epsilon`` (ε),
+            and what the safe region and the island area derive from.
+
+    Returns:
+        The grid with the moved planes, in the same order with the same indices; U, the counts
+        and the extent are unchanged. ``layout`` itself when no plane moves.
+
+    Raises:
+        AssertionError: A cell doesn't fit U afterwards (``check_fits``), a bug.
+    """
+    steps = config.derived(cfg).nudge_steps
+    if steps == 0:  # nudge_window = 0, or smaller than one step
+        return layout
+    current = layout
+    for axis in _AXES:
+        for index in range(len(layout.planes[axis])):
+            current = _nudge_plane(body, current, axis, index, steps, cfg)
+    check_fits(current)  # task 4
+    return current
+
+
+def candidate_shifts(
+    low: float, offset: float, high: float, usable: float, steps: int, step: float
+) -> tuple[float, ...]:
+    """Return the moves a plane may make: the multiples of the step within the window and its slack.
+
+    A move δ = j · step, for an integer j with |j| ≤ ``steps`` (so the steps don't add up
+    rounding errors, and the window is counted in steps: ``derived(cfg).nudge_steps``), is
+    kept when:
+
+    - the plane stays strictly between its neighbours (PLAN.md Appendix E, r9);
+    - both cells it bounds still fit U (``fits``, the count's own arithmetic).
+
+    Those two are the plane's slack on each side, so this is PLAN.md Phase 6's
+    window = min(W_n, slack), side by side.
+
+    Args:
+        low: The bound below the plane: the previous plane's offset, or 0, mm.
+        offset: The plane's offset, mm.
+        high: The bound above: the next plane's offset, or the extent, mm.
+        usable: U along the plane's axis, mm.
+        steps: How many steps the window holds on each side, ``derived(cfg).nudge_steps``
+            (at most ``MAX_NUDGE_STEPS``, 100, so at most 201 moves).
+        step: δ_n, ``advanced.nudge_step``, mm (> 0).
+
+    Returns:
+        The moves, mm, in increasing order. 0 is among them when the plane's two cells fit.
+    """
+    shifts: list[float] = []
+    for j in range(-steps, steps + 1):
+        shift = j * step
+        position = offset + shift
+        if low < position < high and fits(position - low, usable) and fits(high - position, usable):
+            shifts.append(shift)
+    return tuple(shifts)
+
+
+def choose_shift(shifts: Iterable[float], score: Callable[[float], PlaneScore]) -> float:
+    """Return the move with the lowest (no room, tiny islands, |δ|, δ), compared in that order.
+
+    The last two keys keep a plane where it is when moving gains nothing, and make the choice
+    unique, so it doesn't depend on the order of ``shifts`` (task 2). Moves are scored from
+    the smallest |δ| outwards (then by δ), and scoring stops at the first one that scores
+    (0, 0): no move after it can beat it, so this is the same as scoring every move.
+
+    Args:
+        shifts: The candidate moves, mm, in any order (``candidate_shifts``).
+        score: The score of the plane moved by a shift.
+
+    Returns:
+        The chosen move, mm.
+
+    Raises:
+        ValueError: ``shifts`` is empty.
+    """
+    best: tuple[int, int, float, float] | None = None
+    for shift in sorted(shifts, key=lambda value: (abs(value), value)):
+        result = score(shift)
+        key = (result.no_room, result.islands, abs(shift), shift)
+        if best is None or key < best:
+            best = key
+        if result == _PERFECT:
+            break
+    if best is None:
+        raise ValueError("no candidate shift to choose from")
+    return best[3]
+
+
+def plane_regions(body: Manifold, layout: Grid, plane: Plane, eps: float) -> list[Polygon]:
+    """Return a plane's cut regions, clipped to each pair of cells across it, as cutting does.
+
+    ``geometry.cut_region`` of the body (ADR-0002), then ``geometry.clip_to_cells`` for every
+    pair from ``cell_pairs``: the polygons Phase 4 turns into cut faces, before it looks for
+    their pieces. The rectangles come from the planes of the other two axes, not from the
+    plane's own offset, so ``plane`` may be a moved copy of one of ``layout``'s planes.
+
+    The polygons aren't sorted by polylabel point: a score only counts them, and polylabel
+    took 97 % of the nudging time on the hollow sphere (4.9 s for 3 planes).
+
+    Args:
+        body: The normalized body, mm, cutting frame.
+        layout: The grid.
+        plane: The plane, possibly at a candidate offset.
+        eps: ε, ``advanced.section_epsilon``, mm.
+
+    Returns:
+        Polygons in plane-local (u, v), mm, pair by pair in ``cell_pairs`` order; within a
+        pair in no particular (but deterministic) order.
+    """
+    region = geometry.cut_region(body, plane, eps, ordered=False)
+    if not region:
+        return []
+    return [
+        polygon
+        for neg, pos in cell_pairs(layout, plane)
+        for polygon in geometry.clip_to_cells(
+            region, plane.axis, cell_bounds(layout, neg), cell_bounds(layout, pos), ordered=False
+        )
+    ]
+
+
+def score_regions(regions: Iterable[Polygon], cfg: Config) -> PlaneScore:
+    """Score a plane position by its cut regions (PLAN.md Phase 6, task 2).
+
+    Args:
+        regions: The position's regions, plane-local (u, v), mm (``plane_regions``).
+        cfg: The configuration (the safe-region inset and the island area derive from it).
+
+    Returns:
+        How many regions have no room for a connector, and how many are tiny islands.
+    """
+    island = config.derived(cfg).island_area
+    no_room = islands = 0
+    for region in regions:
+        if connectors.safe_region(region, cfg).is_empty:
+            no_room += 1
+        if region.area < island:
+            islands += 1
+    return PlaneScore(no_room=no_room, islands=islands)
+
+
+def _nudge_plane(
+    body: Manifold, layout: Grid, axis: Axis, index: int, steps: int, cfg: Config
+) -> Grid:
+    """The grid with one plane nudged; ``layout`` itself when the plane stays."""
+    plane = layout.planes[axis][index]
+    bounds = axis_bounds(layout, axis)
+    shifts = candidate_shifts(
+        bounds[index],
+        plane.offset,
+        bounds[index + 2],
+        layout.usable[axis],
+        steps,
+        cfg.advanced.nudge_step,
+    )
+    if len(shifts) < 2:  # nowhere to go: the slack is under one step
+        return layout
+    scores: dict[float, PlaneScore] = {}
+
+    def score(shift: float) -> PlaneScore:
+        moved = replace(plane, offset=plane.offset + shift)
+        scores[shift] = score_regions(
+            plane_regions(body, layout, moved, cfg.advanced.section_epsilon), cfg
+        )
+        return scores[shift]
+
+    shift = choose_shift(shifts, score)
+    name = f"plane {_AXIS_NAMES[axis]}{index} = {plane.offset:.6g}"
+    before, after = scores[0.0], scores[shift]
+    if shift == 0.0:
+        LOGGER.debug(
+            "%s stays (no room %d, tiny islands %d; %d of %d positions scored)",
+            name,
+            before.no_room,
+            before.islands,
+            len(scores),
+            len(shifts),
+        )
+        return layout
+    moved = replace(plane, offset=plane.offset + shift)
+    LOGGER.debug(
+        "%s moves by %+.6g mm to %.6g (no room %d -> %d, tiny islands %d -> %d)",
+        name,
+        shift,
+        moved.offset,
+        before.no_room,
+        after.no_room,
+        before.islands,
+        after.islands,
+    )
+    row = list(layout.planes[axis])
+    row[index] = moved
+    x, y, z = (tuple(row) if a == axis else layout.planes[a] for a in _AXES)
+    return replace(layout, planes=(x, y, z))
+
+
+def cell_pairs(layout: Grid, plane: Plane) -> tuple[tuple[CellIndex, CellIndex], ...]:
+    """Return the pairs of cells adjacent across a plane.
+
+    Args:
+        layout: The grid.
+        plane: One of its planes (or a moved copy: only its axis and index count).
+
+    Returns:
+        (neg cell, pos cell) pairs, in cell order of the neg cell (``cell_indices``).
+    """
+    axis = plane.axis
+    pairs: list[tuple[CellIndex, CellIndex]] = []
+    for index in cell_indices(layout):
+        if index[axis] == plane.index:
+            i, j, k = (value + 1 if a == axis else value for a, value in enumerate(index))
+            pairs.append((index, (i, j, k)))
+    return tuple(pairs)
 
 
 def axis_bounds(grid: Grid, axis: Axis) -> tuple[float, ...]:

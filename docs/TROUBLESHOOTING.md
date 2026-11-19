@@ -107,8 +107,11 @@ them; the run exits 3. The message gives the face and the reason:
 
 Fix: glue the face without a pin, or give the connectors more room: a smaller
 `--dowel-diameter` (also shortens the shortest pin, 3 × d), a smaller `--min-wall`, or a
-different `--bed` / `--margin` so the planes fall elsewhere. Plane nudging (Phase 6) will move
-planes away from faces like these. [Details](ALGORITHMS.md#connector-placement).
+different `--bed` / `--margin` so the planes fall elsewhere. Plane nudging already moves each
+plane up to `nudge_window` (5 mm) to a position whose faces have room; a larger
+`advanced.nudge_window` lets it look further. Nudging sees only the face, not the material
+behind it, so a plane moved just off a thin neck can still give this warning.
+[Details](ALGORITHMS.md#connector-placement), [nudging](ALGORITHMS.md#plane-nudging).
 
 ### W002 — Pin shortened (warning)
 Some pins of a face are shorter than `--dowel-length`, because a piece is too shallow behind
@@ -134,8 +137,9 @@ neighbour, so it is printed on its own. The message gives the reason:
 - `it couldn't be cut cleanly from the model`: something else would have been cut with it.
 
 Fix: usually nothing. The piece prints on its own; glue it in place when assembling (it has
-connectors only if its face has room for one). Plane nudging (Phase 6) will move planes away
-from slivers. [Details](ALGORITHMS.md#small-piece-merge).
+connectors only if its face has room for one). Plane nudging moves planes off thin features
+(cut regions under 4 · π · (d/2)²) within `advanced.nudge_window`, which avoids some slivers.
+[Details](ALGORITHMS.md#small-piece-merge).
 
 ### W005 — Small piece merged (info)
 A piece smaller than `small_piece_volume` crossed a cut plane by a little, and was merged into

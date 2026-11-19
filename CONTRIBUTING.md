@@ -30,7 +30,7 @@ imported without `--deep-repair`). On Linux its filter plugins also need the sys
 ```bash
 python scripts/check.py                     # ruff, ruff format --check, mypy, all tests except slow
 python scripts/check.py --fast              # same, without the e2e tests
-pytest -q tests/unit/test_grid.py -k nudge  # one test
+pytest -q tests/unit/test_nudge.py -k slack # one test
 pytest -m slow                              # performance tests (manual, weekly CI)
 ruff format .                               # format the code (Markdown is excluded on purpose)
 python scripts/api_spike.py                 # after any dependency upgrade

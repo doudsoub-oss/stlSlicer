@@ -448,6 +448,11 @@ def _run(ns: argparse.Namespace) -> ExitCode:
             orientation.name,
         )
         exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
+        with stage("nudging"):
+            nudged = grid.nudge(body, layout, cfg)
+        if any(layout.planes):
+            LOGGER.info("nudging: %s", _nudge_summary(layout, nudged))
+        layout = nudged
         with stage("cutting"):
             result = cutting.cut(body, layout, cfg, report.reference_volume)
         LOGGER.info(
@@ -474,7 +479,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         with stage("output directory"):
             io.prepare_output_dir(ns.output, force="force" in ns)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 6 onwards); stopping here",
+        "the %s mode is not implemented yet (PLAN.md Phase 7 onwards); stopping here",
         mode.value,
     )
     return exit_code
@@ -495,7 +500,7 @@ def dry_run_report(
 
     Args:
         orientation: From ``grid.orient``.
-        layout: From ``grid.even_grid``.
+        layout: From ``grid.nudge`` (the planes the model is cut along).
         result: From ``cutting.cut``.
         placement: From ``connectors.place``.
 
@@ -537,6 +542,20 @@ def dry_run_report(
     for (diameter, length), count in sorted(pins.items(), key=lambda item: (-item[0][1], item[0])):
         lines.append(f"pin {_number(diameter)} x {_number(length)} mm: {count}")
     return "\n".join(lines) + "\n"
+
+
+def _nudge_summary(before: Grid, after: Grid) -> str:
+    """How many planes nudging moved, and where, e.g. ``1 of 2 planes moved (Z 150 -> 147.5)``."""
+    pairs = [
+        (axis, old.offset, new.offset)
+        for axis, (olds, news) in enumerate(zip(before.planes, after.planes, strict=True))
+        for old, new in zip(olds, news, strict=True)
+    ]
+    moves = [
+        f"{'XYZ'[axis]} {_number(old)} -> {_number(new)}" for axis, old, new in pairs if old != new
+    ]
+    summary = f"{len(moves)} of {_plural(len(pairs), 'plane')} moved"
+    return f"{summary} ({', '.join(moves)})" if moves else summary
 
 
 def _axis_mapping(matrix: tuple[tuple[float, float, float, float], ...]) -> str:

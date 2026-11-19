@@ -58,6 +58,15 @@ All notable changes to this project are documented here. The format follows
   into the piece they touch when the merged piece still fits and can be put in place with one
   straight move (W005); otherwise they stay on their own with the reason (W004). Pieces
   without a cut face are reported (W008).
+- Plane nudging (ADR-0003): each cut plane may move up to `advanced.nudge_window` (5 mm) in
+  steps of `advanced.nudge_step` (0.5 mm) to a position with fewer faces that have no room
+  for a connector, then fewer tiny regions (under 4 · π · (d/2)²), and stays where it is
+  unless moving gains something. Every piece still fits the usable volume. A plane through a
+  6 × 6 neck moves off it onto the 60 × 60 section next to it. The log shows
+  `nudging: 1 of 1 plane moved (Z 150 -> 147.5)`; `--dry-run` prints the nudged planes.
+  `nudge_window = 0` turns it off. `nudge_window / nudge_step` may be at most 100 (exit 1
+  otherwise, naming `advanced.nudge_step`): a tiny step made the search run out of memory or
+  exit 4.
 - Connector placement: every cut face gets up to `--max-connectors-per-face` dowel positions
   (two whenever two fit, so the pieces can't rotate), spread out over the face and kept
   `--min-wall` from its edges. Each hole is checked in 3D: enough material behind the face on

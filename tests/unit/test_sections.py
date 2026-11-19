@@ -102,6 +102,19 @@ def test_clip_to_cells_splits_a_region_into_connected_polygons_in_polylabel_orde
     ]
 
 
+def test_unordered_regions_are_the_same_polygons() -> None:
+    # Plane nudging skips the polylabel sort (Phase 6); the polygons themselves don't change.
+    plane = Plane(axis=2, index=0, offset=5.0)
+    ordered = geometry.cut_region(two_bodies(), plane, EPS)
+    unordered = geometry.cut_region(two_bodies(), plane, EPS, ordered=False)
+    assert sorted(polygon.wkb for polygon in unordered) == sorted(p.wkb for p in ordered)
+    cells = ((0.0, 0.0, 0.0), (15.0, 10.0, 5.0)), ((0.0, 0.0, 5.0), (15.0, 10.0, 10.0))
+    clipped = geometry.clip_to_cells(ordered, 2, *cells)
+    loose = geometry.clip_to_cells(ordered, 2, *cells, ordered=False)
+    assert sorted(p.wkb for p in loose) == sorted(p.wkb for p in clipped)
+    assert len(clipped) == 1
+
+
 def test_clip_to_cells_drops_what_only_touches_the_rectangle() -> None:
     below = ((0.0, 0.0, 0.0), (100.0, 100.0, 50.0))
     above = ((0.0, 0.0, 50.0), (100.0, 100.0, 100.0))

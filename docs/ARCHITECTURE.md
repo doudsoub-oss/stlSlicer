@@ -26,7 +26,7 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders and holes | `config`, `models` | ✓ |
 | `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
 | `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) | ✓ |
-| `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` | ✓ (nudging in Phase 6) |
+| `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` (for `safe_region`) | ✓ |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
 | `labels` | Text outlines and layout on a face | `geometry` | TODO (Phase 8) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` | TODO (Phase 7) |

@@ -1,7 +1,7 @@
 """Splitting into pieces, piece IDs, cut faces and the small-piece merge.
 
-Fourth stage of the pipeline (PLAN.md §5.1), after the grid (``grid.even_grid``; nudged from
-Phase 6). ``cut`` runs ``split_cells`` → ``cut_faces`` → ``merge_small_pieces`` →
+Fourth stage of the pipeline (PLAN.md §5.1), after the grid (``grid.even_grid``, then
+``grid.nudge``). ``cut`` runs ``split_cells`` → ``cut_faces`` → ``merge_small_pieces`` →
 ``check_pieces`` on the normalized body (cutting frame, mm) and returns the pieces, their cut
 faces and the diagnostics: W004 and W005 from the merge, W008 for pieces without a cut face.
 
@@ -251,10 +251,7 @@ def _plane_faces(
     axis = plane.axis
     sections: dict[tuple[str, float], MultiPolygon] = {}  # piece sections, cached per plane
     faces: list[CutFace] = []
-    for neg_index in grid.cell_indices(layout):
-        if neg_index[axis] != plane.index:
-            continue
-        pos_index = _next_cell(neg_index, axis)
+    for neg_index, pos_index in grid.cell_pairs(layout, plane):  # as nudging scores them
         polygons = geometry.clip_to_cells(
             region, axis, grid.cell_bounds(layout, neg_index), grid.cell_bounds(layout, pos_index)
         )
@@ -567,8 +564,3 @@ def check_pieces(pieces: Sequence[Piece], reference_volume: float) -> None:
 def _point(values: Sequence[float]) -> geometry.Point3:
     x, y, z = values
     return (x, y, z)
-
-
-def _next_cell(index: CellIndex, axis: Axis) -> CellIndex:
-    i, j, k = (value + 1 if a == axis else value for a, value in enumerate(index))
-    return (i, j, k)

@@ -6,7 +6,7 @@ CLI that splits an oversized STL into printable, connectable parts. Python ≥ 3
 - Dev install: `pip install -e ".[dev]"`
 - All checks (run before every commit): `python scripts/check.py`
 - Without e2e tests: `python scripts/check.py --fast`
-- One test: `pytest -q tests/unit/test_grid.py -k nudge`
+- One test: `pytest -q tests/unit/test_nudge.py -k slack`
 - After a dependency upgrade: `python scripts/api_spike.py`
 
 ## Where to look

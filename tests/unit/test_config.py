@@ -139,6 +139,7 @@ def test_derived_values_match_plan_section_6() -> None:
     assert d.connector_spacing == 15.0
     assert d.area_per_connector == 900.0
     assert d.island_area == pytest.approx(78.54, abs=0.01)
+    assert d.nudge_steps == 10
     assert d.label_keep_out == pytest.approx(5.1)
     assert d.probe_radius == pytest.approx(4.7)
     assert d.ray_length == pytest.approx(13.5)
@@ -407,6 +408,18 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
         ),
         pytest.param({"advanced.nudge_step": 0.0}, "advanced.nudge_step", "> 0", id="nudge-step"),
         pytest.param(
+            {"advanced.nudge_step": 0.01},
+            "advanced.nudge_step",
+            ">= advanced.nudge_window / 100 = 0.05",
+            id="nudge-steps-over-100",
+        ),
+        pytest.param(
+            {"advanced.nudge_step": 5e-324},  # the window / step ratio overflows to inf
+            "advanced.nudge_step",
+            "at most 100 nudge steps",
+            id="nudge-step-tiny",
+        ),
+        pytest.param(
             {"advanced.small_piece_volume": -1.0},
             "advanced.small_piece_volume",
             ">= 0",
@@ -491,6 +504,15 @@ def test_validation_rejects_bad_value(overrides: dict[str, Any], key: str, rule:
         pytest.param({"advanced.circular_segments": 256}, id="max-segments"),
         pytest.param({"advanced.pin_length_step": 0.1}, id="smallest-step"),
         pytest.param({"advanced.nudge_window": 0.0}, id="nudging-off"),
+        pytest.param({"advanced.nudge_step": 0.05}, id="hundred-nudge-steps"),
+        pytest.param(
+            {"advanced.nudge_window": 0.9, "advanced.nudge_step": 0.009},  # 100.00000000000001
+            id="hundred-nudge-steps-with-float-noise",
+        ),
+        pytest.param(
+            {"advanced.nudge_window": 0.0, "advanced.nudge_step": 5e-324},
+            id="nudging-off-tiny-step",
+        ),
         pytest.param({"advanced.section_epsilon": 0.1}, id="epsilon-max"),
         pytest.param({"advanced.small_piece_volume": 0.0}, id="merging-off"),
         pytest.param({"advanced.label_min_height": 12.0}, id="label-min-equals-max"),

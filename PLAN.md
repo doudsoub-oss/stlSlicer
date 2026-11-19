@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r8** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r9** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -69,7 +69,7 @@ what surprised you, what to watch.
 | 3 | Orientation and even grid | done | `b354c40`, `f63cee3` (tag `v0.3.0`) | For Phase 4: `cli._run` now runs `grid.orient` → `grid.even_grid` after repair, then stops with a "not implemented yet (Phase 4 onwards)" warning: replace that stub with `cutting.split_cells`. From there `body` is in the **cutting frame** (bounding-box minimum exactly at the origin, LIBRARY_NOTES `manifold.signed_permutation_exact`) and `layout` is the `Grid`; `grid.axis_bounds`, `grid.cell_indices` (sorted (i, j, k)) and `grid.cell_bounds` give the cells. `Orientation.input_to_cutting` (4×4, tuples) is for `assembly.json` in Phase 9. Plan changes in Appendix E r6: the cell-fit check is relative (`≤ U · (1 + GRID_TOLERANCE)`; the absolute `U + 1e-9` contradicted the count's relative slack) and, after the review, evaluated in the count's own arithmetic (`grid.fits`: `size / U − tol ≤ 1`), since `size <= U * (1 + tol)` rounded the other way for one float and a valid box exited 4 (`f63cee3`); use `grid.fits` whenever nudging (Phase 6) checks a cell; the six rotations and their tie order are in `grid.ROTATIONS`; `Orientation` lives in `models`; the dry-run plan goes to stdout (`cli.dry_run_report`, extend it as stages land), logs to stderr. First hypothesis tests: `tests/conftest.py` loads a derandomized `ci` profile when `CI` is set. `chiral_l` is a three-armed corner, not a flat L (a flat L is its own mirror image). The grid has no upper bound on the cell count (a 5 m model on a tiny bed): Phase 10 territory. |
 | 4 | Sections, cutting, cut faces, small-piece merge | done | `2180729` | For Phase 5: `cli._run` now runs `cutting.cut` after the grid (pieces, faces, W004/W005/W008; I1 and I3 checked, `AssertionError` = exit 4), then stops with a "not implemented yet (Phase 5 onwards)" warning: replace that stub with `connectors.place`. Faces are `models.CutFace` with the region in plane-local (u, v), from the normalized body (ADR-0002); `geometry.section`, `polylabel_point`, `shadow`, `grow`, `prism`, `rectangle`, `bodies`, `split_at` and `clip` are there to reuse. Pieces without faces (W008) get no connectors. **Cut solids only by difference** (`geometry.split_at`, `geometry.clip`): `split_by_plane`, `trim_by_plane` and `^` leave a zero-thickness flap where a model face lies on the cut (spike `manifold.coplanar_cuts`); this matters for Phase 7's booleans too. Plan changes in Appendix E r7: a merged piece is cut again from the body, never glued (a union of split halves keeps an internal face when the plane passes through mesh vertices; spike `manifold.union_of_split_halves`); bodies keep their voids (`decompose()` returns voids as separate inside-out shells); `geometry.reverse_winding` now goes through `Mesh64` (float64); `cutting` imports `grid`; three bugs found by the review (flaps, merged body picked by volume, prisms reaching other cells), fixed and tested. Performance: `polylabel` at 1e-3 mm is slow on thin regions (about 30 ms for a 2 mm ring); `geometry.polylabel_point` caches it, which took the hollow sphere on 27 cells from 3.4 s to 0.4 s. The merge (booleans on two cells) and polylabel are the hot spots to watch in Phase 10. |
 | 5 | Connector placement | done | `f935d6f` | For Phase 6: `cli._run` now runs `connectors.place` after the cutting, then stops with a "not implemented yet (Phase 6 onwards)" warning. Nudging goes between `grid.even_grid` and `cutting.cut`; its scores can use `geometry.cut_region` and `connectors.safe_region(region, cfg)` (a `MultiPolygon`, possibly empty). `grid` may import `connectors`: it imports only `geometry`, `config`, `errors` and `models`. For Phase 7: cut the holes with `geometry.hole_solid` (bore r_h plus mouth chamfer, radii compensated), the shape the collision check used; `connectors.hole_solids(connector, face, cfg)` gives them per piece; a peg stands on the neg piece (`hole_depth_neg = 0`). Plan changes in Appendix E r8: face order, not ID string order; farthest-point sampling from the accepted connectors; at most 256 trials per face (`MAX_CANDIDATE_TRIALS`); `connectors.length` ≤ max(bed X, bed Y) (a bound by U would have broken the margin boundary test); depths measured from the face; `min_gap` compared with `LENGTH_TOLERANCE` (it gives 1.999999999999993 for 2 mm); W002 once per face; `wide_u_shape` fixture. **manifold3d booleans are lazy**: the cost shows at the first query (a cylinder-plus-cone union cost 3 ms there), so holes are revolved (0.14 ms), and `_too_close` checks bounding boxes and a ray cast along the axis before `min_gap` (2 ms on crossing solids). Performance: placement takes 1.5 s on the 2×2×2 cube (541 trials for 48 connectors). The review found no correctness bug, and one item for Phase 10: the containment fallback tries every standard length, so with `pin_length_step = 0.1` and a 60 mm pin (451 lengths) a rejected candidate costs about 330 ms and a face where all 256 trials fail about 84 s. A binary search over the lengths would fix it, but take care at the 1e-6 tolerance edge, where containment isn't monotonic in L. |
-| 6 | Plane nudging | todo | | |
+| 6 | Plane nudging | done | `e6bdb67` | For Phase 7: `cli._run` now runs `grid.nudge` between `grid.even_grid` and `cutting.cut`, then stops with a "not implemented yet (Phase 7 onwards)" warning: replace that stub with `tools.apply`. Cells are no longer all equal once a plane moves; everything downstream must take bounds from `grid.axis_bounds` / `grid.cell_bounds`, never `extent / n`. Plan changes in Appendix E r9: a plane stays strictly between its neighbours (`grid.check_fits` also asserts increasing bounds); `grid.cell_pairs` is shared by nudging and `cutting.cut_faces`; scoring calls `geometry.cut_region` and `clip_to_cells` with `ordered=False` (the polylabel sort was 97 % of the time: hollow sphere 4.9 s, now 0.11 s); scoring stops at the first (0, 0) score; `nudge_window / nudge_step` ≤ 100 (`MAX_NUDGE_STEPS`), with the window counted in steps (`derived(cfg).nudge_steps`); the example test command is now `tests/unit/test_nudge.py -k slack`. **The score is 2D**: moved just off a neck, a plane leaves a thin slab on the neck side, so `tall_figure` still gets W001 from the 3D checks (0.5 mm of box under the neck); a depth-aware score is a Phase 10 or v2 question (ADR-0003, "Consequences"). Performance: a 1M-triangle hollow sphere, where every position is scored (63), takes 2.1 s; at the 100-step limit one plane costs up to 201 scores, about 7 s at 1M triangles. The review found one bug (a tiny `nudge_step` overflowed, exit 4, or ran out of memory), fixed by the step limit and tested. |
 | 7 | Tool solids, booleans, dowels, calibration kit | todo | | |
 | 8 | Labels | todo | | |
 | 9 | Assembly order, export, assembly map, preview | todo | | |
@@ -639,7 +639,8 @@ the key.
 - Advanced: `axial_play` ≥ 0; `pin_length_step` ≥ 0.1; `pin_min_length_factor` > 0;
   0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4; 0 ≤ `hole_chamfer` ≤ w/2;
   16 ≤ `circular_segments` ≤ 256; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
-  `nudge_window` ≥ 0; `nudge_step` > 0; 0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
+  `nudge_window` ≥ 0; `nudge_step` > 0 and `nudge_window / nudge_step` ≤ 100 (r9);
+  0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
   0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
   ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
 - Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config` (`--print-config` with
@@ -900,7 +901,7 @@ independent reviewer check the result.
 pip install -e ".[dev]"                     # development environment
 python scripts/check.py                     # ruff, ruff format --check, mypy, all tests except slow
 python scripts/check.py --fast              # same, without the e2e tests
-pytest -q tests/unit/test_grid.py -k nudge  # one test
+pytest -q tests/unit/test_nudge.py -k slack # one test
 python scripts/api_spike.py                 # after any dependency upgrade
 ```
 
@@ -1414,7 +1415,8 @@ a connector, without breaking the bed fit and without moving planes for no gain.
 
 **Tasks.**
 1. For each plane, in axis order X, Y, Z and then by increasing offset:
-   - Its slack is how far it can move while both neighbouring cells still fit U.
+   - Its slack is how far it can move while both neighbouring cells still fit U and it stays
+     strictly between its neighbouring planes (or 0 and the extent; r9).
    - window = min(W_n, slack).
    - Candidate shifts: δ ∈ {0, ±δ_n, ±2δ_n, …} within the window.
 2. Score each candidate with a tuple compared lexicographically (lower is better). The cut regions
@@ -1836,7 +1838,7 @@ CLI that splits an oversized STL into printable, connectable parts. Python ≥ 3
 - Dev install: `pip install -e ".[dev]"`
 - All checks (run before every commit): `python scripts/check.py`
 - Without e2e tests: `python scripts/check.py --fast`
-- One test: `pytest -q tests/unit/test_grid.py -k nudge`
+- One test: `pytest -q tests/unit/test_nudge.py -k slack`
 - After a dependency upgrade: `python scripts/api_spike.py`
 
 ## Where to look
@@ -1901,7 +1903,7 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `duplicated_cube(inside_out)` | The same cube twice | Identical shells merged, W010 (r5) |
 | `flat_sheet` | A square, its two triangles facing both ways | Closed but no volume, exit 2 (r5) |
 | `dense_sphere` | `Manifold.sphere(20, 256)` | `--simplify` |
-| `tall_figure` | Stacked boxes with a thin neck | Nudging |
+| `tall_figure(height, necks)` | 60 × 60 boxes stacked along Z, joined by 6 × 6 necks; by default 300 mm tall with one neck from z = 148 to 153 (r9) | Nudging |
 | `plinth_step` | 10 × 10 × 20 box on a 40 × 40 × 10 plinth | Contact region at a step |
 | `overhang_step` | 40 × 40 × 10 plate on a 10 × 10 × 10 column | Contact region, other step direction |
 | `knob` | Box with a small knob crossing a plane | Small-piece merge |
@@ -1911,6 +1913,34 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r9 — 2026-11-19 (Phase 6).** Found while planning and implementing Phase 6, agreed with the
+maintainer:
+
+- **A plane stays strictly between its neighbours** (task 1). The slack was defined only by
+  both neighbouring cells fitting U; with a large `nudge_window` a plane could then pass its
+  neighbour, since a cell of negative size passes the fit check. `grid.check_fits` now also
+  asserts that the bounds increase strictly.
+- **Shared cell pairs**: `grid.cell_pairs` lists the cell pairs across a plane for both
+  nudging and `cutting.cut_faces`, so the regions nudging scores are clipped exactly as the
+  cut faces are.
+- **No polylabel sort when scoring**: `geometry.cut_region` and `geometry.clip_to_cells` take
+  `ordered=False`. A score only counts regions, and the sort took 97 % of the nudging time on
+  the hollow sphere (4.9 s for 3 planes, 0.11 s without).
+- **Scoring stops early**: moves are scored from the smallest |δ| outwards and scoring stops
+  at the first (0, 0). The result is the one scoring every move would give.
+- **The 2D score has a limit** (recorded, not changed): a plane moved just off a neck leaves
+  a thin slab on the neck side, so the face can still get W001 from the 3D checks
+  (`tall_figure`: 0.5 mm of the lower box stays with the neck). ADR-0003, "Consequences".
+- **`nudge_window / nudge_step` ≤ 100** (§7.5), found by the review: `nudge_step` was only
+  checked > 0, so 5e-324 overflowed (exit 4) and 1e-9 ran out of memory. The window is now
+  counted in steps, `floor(W_n / δ_n + 1e-9)` (`derived(cfg).nudge_steps`), and validation
+  uses the same expression, so a plane has at most 201 positions (`MAX_NUDGE_STEPS`). The
+  absolute `|δ| ≤ W_n + 1e-9 mm` it replaces would have let a sub-nanometre window hold
+  10⁵ steps of 1e-14 mm.
+- **Example test command**: `pytest -q tests/unit/test_nudge.py -k slack` replaces
+  `tests/unit/test_grid.py -k nudge`, which selects nothing now that the nudging tests have
+  their own file (§9.6, Appendix B, CLAUDE.md, CONTRIBUTING.md).
 
 **r8 — 2026-11-19 (Phase 5).** Found while planning and implementing Phase 5, agreed with the
 maintainer:
