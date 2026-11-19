@@ -161,10 +161,14 @@ already fits.
 - **Cells** (i, j, k) span, along each axis, two consecutive values of
   `grid.axis_bounds`: 0, the plane offsets, then the extent. `grid.cell_indices` lists them
   sorted by (i, j, k); `grid.cell_bounds` gives one box.
-- **Fit check:** every cell's size is at most `U · (1 + 1e-9)`; otherwise it is a bug
-  (exit 4). The bound is relative because the count's slack is: a cell can be up to
-  0.2 nm over U = 210 (PLAN.md Appendix E, r6). With the formula, n is also minimal: n − 1
-  cells would each be larger than U.
+- **Fit check** (`grid.fits`): every cell's size is at most `U · (1 + 1e-9)`; otherwise it is
+  a bug (exit 4). The bound is relative because the count's slack is: a cell can be up to
+  0.2 nm over U = 210 (PLAN.md Appendix E, r6). It is evaluated as `size / U − 1e-9 ≤ 1`, the
+  count's own expression. Written as `size <= U * (1 + 1e-9)`, it rounded differently for one
+  float at the edge: a 100 × 100 × 230 box whose bottom sat 2.3e-7 mm below zero (float32
+  export noise) counted as one cell on U = 230, then failed the check. With two cells or more,
+  the slack leaves a margin of at least 5e-10 for the rounding of `k · extent / n`. With the
+  formula, n is also minimal: n − 1 cells would each be larger than U.
 - **Peg mode:** U is smaller by L_max/2 per axis (200 × 200 × 230 by default), because pegs
   stick out of their cell (ADR-0005). It comes from `config.derived`, like every number.
 - **One cell on every axis:** W012 (info), "nothing to cut". The pipeline continues with one

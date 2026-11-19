@@ -86,21 +86,44 @@ def test_peg_mode_grid_uses_the_reduced_usable_volume() -> None:
 
 
 @pytest.mark.parametrize(
-    ("extent", "count"),
+    ("extent", "usable", "count"),
     [
-        pytest.param(210.0, 1, id="exactly-U"),
-        pytest.param(210.0 + 1e-7, 1, id="float-noise-over-U"),
-        pytest.param(210.0 * (1 + 1e-8), 2, id="really-over-U"),
-        pytest.param(420.0, 2, id="exactly-2U"),
-        pytest.param(420.00000000000006, 2, id="one-ulp-over-2U"),
-        pytest.param(420.001, 3, id="over-2U"),
+        pytest.param(210.0, 210.0, 1, id="exactly-U"),
+        pytest.param(210.0 + 1e-7, 210.0, 1, id="float-noise-over-U"),
+        pytest.param(210.0 * (1 + 1e-8), 210.0, 2, id="really-over-U"),
+        pytest.param(420.0, 210.0, 2, id="exactly-2U"),
+        pytest.param(420.00000000000006, 210.0, 2, id="one-ulp-over-2U"),
+        pytest.param(420.001, 210.0, 3, id="over-2U"),
+        # One cell exactly at the slack's edge. U·(1 + 1e-9) rounds below these extents, so a
+        # fit check written as "size <= U·(1 + tol)" disagreed with the count (Phase 3 review;
+        # a 100 x 100 x 230 box with float32 noise exited 4 in peg mode).
+        pytest.param(230.00000023000004, 230.0, 1, id="slack-edge-U230"),
+        pytest.param(220.00000022000003, 220.0, 1, id="slack-edge-U220"),
     ],
 )
-def test_cell_count_tolerates_float_noise_only(extent: float, count: int) -> None:
-    assert grid.cell_count(extent, 210.0) == count
+def test_cell_count_tolerates_float_noise_only(extent: float, usable: float, count: int) -> None:
+    assert grid.cell_count(extent, usable) == count
     # The fit check accepts what the count allows (PLAN.md Appendix E, r6): no AssertionError.
-    layout, _ = grid.even_grid((extent, 10.0, 10.0), (210.0, 210.0, 210.0))
+    layout, _ = grid.even_grid((extent, 10.0, 10.0), (usable, usable, usable))
     assert layout.counts[0] == count
+
+
+@given(
+    usable=USABLE,
+    cells=st.integers(min_value=1, max_value=50),
+    ulps=st.integers(min_value=-64, max_value=64),
+)
+def test_extents_at_the_slack_edge_never_fail_the_fit_check(
+    usable: float, cells: int, ulps: int
+) -> None:
+    # Extents within 64 floats of cells · U · (1 + tol), where float rounding decides.
+    edge = cells * usable * (1 + GRID_TOLERANCE)
+    extent = edge + ulps * math.ulp(edge)
+    layout, _ = grid.even_grid((extent, 1.0, 1.0), (usable, usable, usable))  # no AssertionError
+    assert layout.counts[0] in (cells, cells + 1)
+    sizes = np.diff(grid.axis_bounds(layout, 0))
+    # A cell fits when it would be one cell on its own: the count's own arithmetic.
+    assert (sizes / usable - GRID_TOLERANCE <= 1).all()
 
 
 def test_cells_are_listed_in_index_order_with_their_bounds() -> None:

@@ -1198,7 +1198,7 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
    k = 1 … n_i − 1. Even spacing gives pieces of similar size, instead of filling one bed and
    leaving a sliver. The 1e-9 is `config.GRID_TOLERANCE`, a relative slack.
 5. Cells and their bounds; assert every cell ≤ U_i · (1 + 1e-9). The bound is relative, like the
-   slack in task 4 (r6).
+   slack in task 4, and evaluated as `cell / U_i − 1e-9 ≤ 1`, task 4's own expression (r6).
 6. If n = 1 on every axis: W012. The pipeline continues with one piece (no faces, connectors or
    labels) and exits 0.
 7. `--dry-run` prints the rotation, extents, U, cell counts, plane offsets and number of cells,
@@ -1893,10 +1893,16 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 
 - **Cell-fit check:** task 4's slack is relative (`ceil(extent / U − 1e-9)`), so a cell can be
   up to `U · (1 + 1e-9)`: 2.1e-7 mm over U = 210. Task 5's absolute `cell ≤ U + 1e-9` would
-  then fail with exit 4 on a valid model, e.g. 210.0000001 mm, reachable with `--scale`. The
-  check is now relative, `cell ≤ U · (1 + GRID_TOLERANCE)`, with one constant
-  `config.GRID_TOLERANCE = 1e-9`. With the formula as written, n is also minimal: n − 1 cells
-  would each be larger than U.
+  then fail with exit 4 on a valid model, e.g. 210.0000001 mm (a vertex a hair below zero, as
+  CAD exports often have). The check is now relative, `cell ≤ U · (1 + GRID_TOLERANCE)`, with
+  one constant `config.GRID_TOLERANCE = 1e-9`. With the formula as written, n is also
+  minimal: n − 1 cells would each be larger than U.
+- **Fit check in the count's arithmetic (Phase 3 review):** `size <= U * (1 + tol)` and
+  `ceil(size / U − tol)` round differently for one float at the edge, so a 100 × 100 × 230 box
+  with its bottom 2.3e-7 mm below zero still exited 4 in peg mode (one cell on U = 230, then
+  "over U"). The check is now `size / U − tol ≤ 1` (`grid.fits`), the count's own expression,
+  and a hypothesis property probes extents within 64 floats of `n · U · (1 + tol)`. The §4.1
+  rounding is the named constant `config.OUTPUT_DECIMALS`.
 - **Odd axis orders:** ADR-0008 leaves the exact construction to Phase 3, which only said
   "negate one axis". The six rotations and their tie-break order are now listed in Phase 3,
   task 2, and in `grid.ROTATIONS`.

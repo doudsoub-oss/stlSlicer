@@ -32,7 +32,7 @@ from typing import Any, NoReturn
 from manifold3d import Manifold
 
 from stlsplit import __version__, config, grid, io, repair
-from stlsplit.config import Config
+from stlsplit.config import OUTPUT_DECIMALS, Config
 from stlsplit.errors import ConfigError, ExitCode, InputError, StlsplitError, exit_code_for
 from stlsplit.models import Diagnostic, Grid, Orientation
 
@@ -467,7 +467,7 @@ def dry_run_report(orientation: Orientation, layout: Grid) -> str:
     """Return the plan the dry run prints on stdout (PLAN.md §7.1, Phase 3 task 7). ASCII only.
 
     It grows as phases land; Phase 3 prints the orientation and the grid. Numbers are rounded
-    to 6 decimals, without trailing zeros (§4.1).
+    to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros (§4.1).
 
     Args:
         orientation: From ``grid.orient``.
@@ -505,9 +505,10 @@ def _sizes(values: Iterable[float]) -> str:
 
 
 def _number(value: float) -> str:
-    """A float rounded to 6 decimals, without trailing zeros; never ``-0``."""
+    """A float rounded to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros; never ``-0``."""
     # + 0.0 turns the -0.0 that round() gives for tiny negatives into 0.0.
-    return f"{round(value, 6) + 0.0:.6f}".rstrip("0").rstrip(".")
+    rounded = round(value, OUTPUT_DECIMALS) + 0.0
+    return f"{rounded:.{OUTPUT_DECIMALS}f}".rstrip("0").rstrip(".")
 
 
 def _model_summary(body: Manifold, report: repair.RepairReport) -> str:

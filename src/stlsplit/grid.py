@@ -12,7 +12,8 @@ Pure: geometry and numbers in, geometry and numbers out. U comes from ``config.d
 Guarantees:
 - Every rotation is a signed permutation with det = +1: the model is never mirrored.
 - The oriented body's bounding box starts exactly at (0, 0, 0).
-- Every cell fits U: its size along axis a is at most ``U_a · (1 + GRID_TOLERANCE)``.
+- Every cell fits U: its size along axis a is at most ``U_a · (1 + GRID_TOLERANCE)``, checked
+  by ``fits`` in the same arithmetic as ``cell_count``.
 - Each axis has the fewest cells that fit: n − 1 even cells would each be larger than U.
 """
 
@@ -77,7 +78,30 @@ def cell_count(extent: float, usable: float) -> int:
     Returns:
         The number of cells, at least 1.
     """
-    return max(1, math.ceil(extent / usable - GRID_TOLERANCE))
+    return max(1, math.ceil(_ratio(extent, usable)))
+
+
+def fits(size: float, usable: float) -> bool:
+    """Return whether a cell of this size fits U: ``size / U − GRID_TOLERANCE ≤ 1``.
+
+    That is ``size ≤ U · (1 + GRID_TOLERANCE)``, evaluated with the expression
+    :func:`cell_count` uses, so a size it counts as one cell always fits. Written as
+    ``size <= U * (1 + tol)``, the two could round differently for one float at the edge
+    (230.00000023000004 on U = 230: one cell, yet "over U"; PLAN.md Appendix E, r6).
+
+    Args:
+        size: Cell size along one axis, mm.
+        usable: U along that axis, mm (> 0).
+
+    Returns:
+        True if the cell fits.
+    """
+    return _ratio(size, usable) <= 1
+
+
+def _ratio(size: float, usable: float) -> float:
+    """``size / U − GRID_TOLERANCE``: the one expression behind both the count and the fit."""
+    return size / usable - GRID_TOLERANCE
 
 
 def rotated_extent(extent: Vec3, rotation: Rotation) -> Vec3:
@@ -206,7 +230,9 @@ def even_grid(extent: Vec3, usable: Vec3) -> tuple[Grid, tuple[Diagnostic, ...]]
     for axis in _AXES:  # task 5: every cell fits U
         bounds = axis_bounds(layout, axis)
         largest = max(high - low for low, high in itertools.pairwise(bounds))
-        if largest > usable[axis] * (1 + GRID_TOLERANCE):
+        # One cell: the count's own expression, so never over. n ≥ 2: the slack leaves a
+        # margin of GRID_TOLERANCE · (1 − 1/n) ≥ 5e-10 for the rounding of k · extent / n.
+        if not fits(largest, usable[axis]):
             raise AssertionError(f"a cell is {largest} mm along axis {axis}, over U = {usable}")
     if layout.counts != (1, 1, 1):
         return layout, ()
