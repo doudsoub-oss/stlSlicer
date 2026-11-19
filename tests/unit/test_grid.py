@@ -148,7 +148,9 @@ def test_every_cell_fits_the_usable_volume(
         assert bounds[-1] == extent[axis]
         sizes = np.diff(bounds)
         assert (sizes > 0).all()
-        assert (sizes <= usable[axis] * (1 + GRID_TOLERANCE)).all()
+        # size ≤ U · (1 + tol), in grid.fits' arithmetic: written as size <= U * (1 + tol), it
+        # rounds differently for one float at the edge (PLAN.md Appendix E, r6).
+        assert (sizes / usable[axis] - GRID_TOLERANCE <= 1).all()
 
 
 @given(extent=EXTENTS, usable=USABLES)
