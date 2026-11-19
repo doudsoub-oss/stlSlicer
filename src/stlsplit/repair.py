@@ -29,7 +29,6 @@ from stlsplit.models import Diagnostic
 if TYPE_CHECKING:  # trimesh is only called through geometry's wrappers (ADR-0001)
     import trimesh
 
-_INSTALL_DEEP_REPAIR = 'pip install "stlsplit[deep-repair]"'
 _REPAIR_ELSEWHERE = (
     'repair the model in MeshLab or with your slicer\'s "fix model", then run stlsplit again'
 )
@@ -300,14 +299,11 @@ def _deep_repair(mesh: "trimesh.Trimesh", cfg: Config) -> Manifold:
         raise _unrepairable(
             mesh,
             "after basic repair",
-            f"Try --deep-repair (needs {_INSTALL_DEEP_REPAIR}), or {_REPAIR_ELSEWHERE}",
+            f"Try --deep-repair (needs {geometry.DEEP_REPAIR_INSTALL}), or {_REPAIR_ELSEWHERE}",
         )
-    if not geometry.deep_repair_available():
-        raise _unrepairable(
-            mesh,
-            "after basic repair",
-            f"--deep-repair needs pymeshlab: {_INSTALL_DEEP_REPAIR}",
-        )
+    problem = geometry.deep_repair_problem()
+    if problem is not None:
+        raise _unrepairable(mesh, "after basic repair", f"--deep-repair can't run: {problem}")
     repaired = geometry.deep_repair(mesh)
     if repaired is not None:
         body = geometry.to_manifold(repaired)

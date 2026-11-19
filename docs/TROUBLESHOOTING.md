@@ -53,7 +53,10 @@ or repair the model in MeshLab or with your slicer's "fix model", then run stlsp
 Fixes, in order:
 
 1. Add `--deep-repair` (install the extra first: `pip install "stlsplit[deep-repair]"`; it
-   uses pymeshlab, GPL-3.0). It removes non-manifold edges and vertices and closes holes.
+   uses pymeshlab, GPL-3.0). It removes non-manifold edges and vertices and closes holes. If
+   the message says `pymeshlab didn't load the filters …`, pymeshlab is installed but its
+   plugins need the system's OpenGL library: on Debian or Ubuntu,
+   `sudo apt install libopengl0`.
 2. Repair the model in MeshLab, or with your slicer's "fix model" or "repair" function, export
    it as STL again, and rerun stlsplit.
 

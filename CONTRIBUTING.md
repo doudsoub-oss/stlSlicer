@@ -21,7 +21,9 @@ touching system packages: `uv python install 3.13`.
 
 The `--deep-repair` tests and the pymeshlab spike check are skipped unless the optional extra
 is installed: `pip install -e ".[dev,deep-repair]"` (pymeshlab is GPL-3.0; it is never
-imported without `--deep-repair`). CI installs it in the Linux 3.13 job.
+imported without `--deep-repair`). On Linux its filter plugins also need the system's
+`libOpenGL.so.0` (Debian and Ubuntu: `sudo apt install libopengl0`); without it the spike's
+`pymeshlab.repair_filters` check fails. CI installs both in the Linux 3.13 job.
 
 ## Commands
 

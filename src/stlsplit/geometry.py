@@ -166,9 +166,43 @@ def _orient_faces(mesh: trimesh.Trimesh) -> int:
     return int(np.count_nonzero((mesh.faces != original).any(axis=1)))
 
 
-def deep_repair_available() -> bool:
-    """Return whether pymeshlab (the ``deep-repair`` extra) is installed, without importing it."""
-    return importlib.util.find_spec("pymeshlab") is not None
+DEEP_REPAIR_INSTALL = 'pip install "stlsplit[deep-repair]"'
+"""How to install pymeshlab, for messages."""
+
+PYMESHLAB_FILTERS: tuple[str, ...] = (
+    "meshing_repair_non_manifold_edges",
+    "meshing_repair_non_manifold_vertices",
+    "meshing_close_holes",
+    "meshing_re_orient_faces_coherently",
+)
+"""The ``MeshSet`` filters deep repair applies, in this order."""
+
+
+def deep_repair_problem() -> str | None:
+    """Return why deep repair can't run, or ``None`` if it can.
+
+    pymeshlab is imported only when it is installed, and only from here and
+    :func:`deep_repair` (it is GPL-3.0, PLAN.md §2). Its filters are plugins that need system
+    libraries: without the OpenGL library ``libOpenGL.so.0``, the plugin holding
+    ``meshing_close_holes`` doesn't load and the filter is simply missing
+    (docs/LIBRARY_NOTES.md).
+
+    Returns:
+        ``None``, or one line saying what is missing and how to fix it.
+    """
+    if importlib.util.find_spec("pymeshlab") is None:
+        return f"pymeshlab is not installed ({DEEP_REPAIR_INSTALL})"
+    import pymeshlab  # optional extra, imported only when deep repair is needed
+
+    meshes = pymeshlab.MeshSet()
+    missing = [name for name in PYMESHLAB_FILTERS if not hasattr(meshes, name)]
+    if not missing:
+        return None
+    return (
+        f"pymeshlab didn't load the filter{'s' if len(missing) > 1 else ''} "
+        f"{', '.join(missing)}, usually because the system's OpenGL library libOpenGL.so.0 "
+        "is missing (Debian and Ubuntu package: libopengl0)"
+    )
 
 
 def deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
@@ -178,8 +212,8 @@ def deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
     faces coherently. pymeshlab is GPL-3.0, so it is imported here only (PLAN.md §2).
 
     Args:
-        mesh: Triangle mesh, mm, input frame. pymeshlab must be installed
-            (:func:`deep_repair_available`).
+        mesh: Triangle mesh, mm, input frame. :func:`deep_repair_problem` must have
+            returned ``None``.
 
     Returns:
         The repaired mesh, or ``None`` if pymeshlab refused one of the filters.
@@ -194,10 +228,8 @@ def deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
         )
     )
     try:
-        meshes.meshing_repair_non_manifold_edges()
-        meshes.meshing_repair_non_manifold_vertices()
-        meshes.meshing_close_holes()
-        meshes.meshing_re_orient_faces_coherently()
+        for name in PYMESHLAB_FILTERS:
+            getattr(meshes, name)()
     except pymeshlab.PyMeshLabException:
         return None
     result = meshes.current_mesh()

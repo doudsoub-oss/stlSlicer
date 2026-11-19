@@ -1909,7 +1909,10 @@ maintainer:
   (spike check `trimesh.load_drops_non_finite`).
 - **CI:** the Linux 3.13 job and the weekly upgrade job install the `deep-repair` extra, so
   the pymeshlab code runs somewhere; the spike reports the pymeshlab check as skipped when the
-  extra isn't installed. `pymeshlab>=2025.7.post1` is the verified minimum.
+  extra isn't installed. `pymeshlab>=2025.7.post1` is the verified minimum. The first CI run
+  showed that pymeshlab's filter plugins need the system's `libOpenGL.so.0` (absent from the
+  Ubuntu image): CI installs `libopengl0`, and a missing filter is now an exit 2 saying what
+  to install instead of an `AttributeError` (exit 4).
 
 **r4 — 2026-11-19 (Phase 1).** Gaps in §7.5 found while planning Phase 1, agreed with the
 maintainer:

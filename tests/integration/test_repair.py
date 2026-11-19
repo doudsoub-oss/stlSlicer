@@ -1,9 +1,13 @@
 """Phase 2: load, repair and shell normalization on the Appendix D fixtures (PLAN.md Phase 2)."""
 
 import dataclasses
+import importlib.util
 import math
+import sys
+import types
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import trimesh
@@ -145,13 +149,48 @@ def test_finned_cube_is_repaired_with_deep_repair(write_stl: WriteStl) -> None:
     assert codes(report) == ["W007"]
 
 
+def pretend_pymeshlab(monkeypatch: pytest.MonkeyPatch, module: types.ModuleType | None) -> None:
+    """Make ``import pymeshlab`` find ``module``, or find nothing when it is ``None``."""
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name: str, *args: Any) -> Any:
+        if name == "pymeshlab":
+            return None if module is None else object()
+        return real_find_spec(name, *args)
+
+    monkeypatch.setattr(geometry.importlib.util, "find_spec", find_spec)
+    if module is not None:
+        monkeypatch.setitem(sys.modules, "pymeshlab", module)
+
+
 def test_deep_repair_without_pymeshlab_exits_2_with_the_install_hint(
     write_stl: WriteStl, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(geometry, "deep_repair_available", lambda: False)
+    pretend_pymeshlab(monkeypatch, None)
     with pytest.raises(RepairError) as caught:
         prepare(write_stl, finned_cube(), deep=True)
     assert "stlsplit[deep-repair]" in str(caught.value)
+
+
+def test_deep_repair_whose_filters_did_not_load_exits_2_naming_the_cause(
+    write_stl: WriteStl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Found in CI: without the system's libOpenGL.so.0, pymeshlab loads but some filter plugins
+    # don't, and calling a missing filter was an AttributeError, i.e. exit 4 (docs/LIBRARY_NOTES).
+    fake = types.ModuleType("pymeshlab")
+    fake.MeshSet = type(  # type: ignore[attr-defined]
+        "MeshSet",
+        (),
+        {"meshing_repair_non_manifold_edges": None, "meshing_repair_non_manifold_vertices": None},
+    )
+    pretend_pymeshlab(monkeypatch, fake)
+    with pytest.raises(RepairError) as caught:
+        prepare(write_stl, finned_cube(), deep=True)
+    message = str(caught.value)
+    assert caught.value.exit_code == ExitCode.UNREPAIRABLE
+    assert "meshing_close_holes" in message
+    assert "meshing_re_orient_faces_coherently" in message
+    assert "libOpenGL" in message
 
 
 @pytest.mark.parametrize(
@@ -167,7 +206,7 @@ def test_failed_deep_repair_exits_2_with_the_counts(
     def fake_deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
         return None if outcome == "refused" else mesh
 
-    monkeypatch.setattr(geometry, "deep_repair_available", lambda: True)
+    monkeypatch.setattr(geometry, "deep_repair_problem", lambda: None)
     monkeypatch.setattr(geometry, "deep_repair", fake_deep_repair)
     with pytest.raises(RepairError) as caught:
         prepare(write_stl, finned_cube(), deep=True)

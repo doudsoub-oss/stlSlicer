@@ -77,7 +77,7 @@ whose code will.
 
 | Behaviour | Version | Used by | Spike check |
 |---|---|---|---|
-| The filters `meshing_repair_non_manifold_edges`, `meshing_repair_non_manifold_vertices`, `meshing_close_holes` and `meshing_re_orient_faces_coherently` exist with these names, and in that order turn a box with a stray triangle on one edge (1 non-manifold edge, 2 open edges) into a valid 1000 mm³ box. Failures raise `pymeshlab.PyMeshLabException`. | 2025.7.post1 | `geometry.deep_repair` | `pymeshlab.repair_filters` (skipped when pymeshlab isn't installed) |
+| The filters `meshing_repair_non_manifold_edges`, `meshing_repair_non_manifold_vertices`, `meshing_close_holes` and `meshing_re_orient_faces_coherently` exist with these names, and in that order turn a box with a stray triangle on one edge (1 non-manifold edge, 2 open edges) into a valid 1000 mm³ box. Failures raise `pymeshlab.PyMeshLabException`. The filters are **plugins that need system libraries**: without `libOpenGL.so.0` (Ubuntu package `libopengl0`, absent from the GitHub Ubuntu image), `import pymeshlab` works but prints "Unable to load the following plugins" and `meshing_close_holes` is missing (an `AttributeError` when called). `geometry.deep_repair_problem` checks every filter first. | 2025.7.post1 | `geometry.deep_repair`, `geometry.deep_repair_problem` | `pymeshlab.repair_filters` (skipped when pymeshlab isn't installed; fails if its plugins didn't load) |
 
 ### matplotlib
 

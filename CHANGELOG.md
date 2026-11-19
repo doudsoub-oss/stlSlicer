@@ -26,7 +26,8 @@ All notable changes to this project are documented here. The format follows
 - Loading the input STL (any extension; `--scale` applied), with W006 for a model under 1 mm
   or over 5 m. An empty, unreadable or truncated file exits 1.
 - Try-first repair (ADR-0007): a valid mesh is used as is; otherwise basic repair (W007), then
-  pymeshlab with `--deep-repair` (extra `deep-repair`). A mesh that stays open or
+  pymeshlab with `--deep-repair` (extra `deep-repair`; a missing pymeshlab or filter plugin is
+  reported with what to install). A mesh that stays open or
   non-manifold, or encloses no volume, exits 2 with the open-edge, non-manifold-edge and body
   counts and what to try next.
 - Shell normalization: overlapping shells are unioned (W010), voids are kept at any depth of

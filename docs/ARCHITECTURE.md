@@ -77,9 +77,10 @@ repair.prepare ──▶ Manifold (input frame) + RepairReport
 ```
 
 - **Library boundary.** `repair` never calls trimesh or pymeshlab: every call is a wrapper in
-  `geometry` (ADR-0001). pymeshlab (GPL-3.0, extra `deep-repair`) is imported inside
-  `geometry.deep_repair` only; `geometry.deep_repair_available()` checks for it without
-  importing it.
+  `geometry` (ADR-0001). pymeshlab (GPL-3.0, extra `deep-repair`) is imported only inside
+  `geometry.deep_repair_problem()` and `geometry.deep_repair`, and only when deep repair is
+  needed. `deep_repair_problem()` checks that pymeshlab is installed (without importing it),
+  then that its filter plugins loaded; either problem is an exit 2 that says what to install.
 - **`RepairReport`** (in `repair`, not `models`: only the CLI reads it) holds the repair steps,
   the counts of bodies, voids and shells turned the right way out, the diagnostics, and
   `reference_volume`: the volume of the returned body, measured after `--simplify`, the
