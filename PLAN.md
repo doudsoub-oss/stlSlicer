@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r4** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r5** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -65,7 +65,7 @@ what surprised you, what to watch.
 |---|---|---|---|---|
 | 0 | Scaffolding, documentation skeleton, API spike | done | `2060291`, `44c2cdb` (tag `v0.0.0`) | CI green on Linux 3.12/3.13/3.14, Windows 3.13 and macOS 3.13 (macOS runners can queue for a long time; a job that is never acquired is a capacity problem, re-run it). CI actions are on v7 (Node 24). Dev machine has no system Python ≥ 3.12: use uv (CONTRIBUTING.md). For Phase 1: move `geometry.POLYLABEL_TOLERANCE` to `config.py`; `models.py` holds only `Axis` so far; `errors.py` already has `ExitCode` and the W001–W012 registry. Frames: plane at local z = o both ways (Appendix E, r3). `ruff format` excludes `*.md` (it was rewriting PLAN.md code blocks); manifold3d is in mypy's `ignore_missing_imports` (its `.pyi` has no `py.typed`). Python 3.14 is added to Linux CI. |
 | 1 | Configuration and CLI shell | done | `e869e3b` | For Phase 2: `io.py` exists (output-directory policy, `OWNED_OUTPUTS`, label-font lookup); `io.load_stl` goes there. `cli._run` stops every mode with a "not implemented yet" warning after the checks: replace that stub as stages land; `cli._require_input_file` can move into `io.load_stl`. Stages build diagnostics with `errors.diagnostic()` and return them; `cli.report_diagnostics()` turns them into the exit code. Numbers come from `config.derived(cfg)` only. `pin_length_step` ≥ 0.1 and `circular_segments` ≤ 256 were added after the review (r4). Still open: in dowel mode `connectors.length` has no upper bound, so a huge `--dowel-length` would make `derived()` build (L_max − L_min) / 0.1 standard lengths; bound it (e.g. by the usable volume) when Phase 5 starts using the lengths. `--print-config` writes ASCII; `--config` reads UTF-8 (BOM or not) and UTF-16 with a BOM, for Windows. Symlink tests skip only if the OS refuses to create a symlink. The review found two bugs (huge TOML integers exited 4; the Windows `--print-config > file` round trip), both fixed and tested (PLAN r4). |
-| 2 | Load, repair, shell normalization | todo | | |
+| 2 | Load, repair, shell normalization | done | `f7e568d`, `8d8e6d2` (tag `v0.2.0`) | For Phase 3: `cli._run` loads and repairs (`io.load_stl` → `repair.prepare` → body in the **input frame** plus `RepairReport.reference_volume`, measured after `--simplify`), then stops with a "not implemented yet (Phase 3 onwards)" warning: replace that stub with `grid.orient`. Load and repair run before `io.prepare_output_dir` on purpose (a broken input never touches `-o`). The CLI logs each stage's diagnostics as soon as it returns and keeps the highest exit code. Plan changes in Appendix E r5: the review found that the sign-only shell normalization filled voids (whole model inside out; overlapping hollow parts), so roles now come from containment plus relative orientation, any nesting depth; basic repair keeps each shell's majority orientation (trimesh's `fix_winding` follows one reference face). Edge-touching cubes are valid as is; `finned_cube` is the `--deep-repair` fixture. Fixture gotcha: `Manifold.compose` collapses inside-out shells, so build reversed shells with trimesh concatenation (`tests/conftest.py`). pymeshlab is installed only in the Linux 3.13 and weekly CI jobs; locally `pip install -e ".[dev,deep-repair]"`. Its filter plugins need the system's `libOpenGL.so.0` (Ubuntu: `libopengl0`, installed in CI); without it `geometry.deep_repair_problem()` makes `--deep-repair` exit 2 with that cause instead of crashing (`8d8e6d2`). |
 | 3 | Orientation and even grid | todo | | |
 | 4 | Sections, cutting, cut faces, small-piece merge | todo | | |
 | 5 | Connector placement | todo | | |
@@ -1070,7 +1070,8 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
 
 **Tasks.**
 1. `io.load_stl(path, scale)`:
-   - `trimesh.load(path, force="mesh")` (merges vertices by default).
+   - `trimesh.load(path, file_type="stl", force="mesh")` (merges vertices by default, drops
+     triangles with a non-finite coordinate).
    - An empty or unreadable file raises an input error (exit 1).
    - Apply the scale.
    - W006 if the largest dimension is under 1 mm or over 5000 mm.
@@ -1081,8 +1082,10 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
       - `merge_vertices`;
       - drop degenerate and duplicate faces;
       - `remove_unreferenced_vertices`;
-      - `fix_normals(multibody=False)`. **Never `multibody=True`:** it flips internal voids outward.
-        At plan time it turned a hollow sphere of 557k mm³ into 27.6M mm³;
+      - `fix_normals(multibody=False)`, keeping each shell's majority orientation (r5: its
+        `fix_winding` follows one reference face, so one reversed triangle could reverse a whole
+        void's shell). **Never `multibody=True`:** it flips internal voids outward. At plan time
+        it turned a hollow sphere of 557k mm³ into 27.6M mm³;
       - `fill_holes`, which only closes single-triangle and quad holes.
 
       Retry the conversion. W007 lists the steps applied.
@@ -1093,18 +1096,29 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
       - the non-manifold-edge count;
       - the number of bodies;
       - a hint: `--deep-repair`, or a repair in MeshLab or the slicer's "fix model", then try again.
-3. Shell normalization, only when `decompose()` returns more than one component (ADR-0007):
-   - Union the components with positive volume using `batch_boolean(..., OpType.Add)`.
-   - A component with negative volume is an inside-out shell. Reverse its winding to get F.
-     - If `(F − positive union).volume()` ≤ 1e-6 × `F.volume()`, it's a **void**: subtract F.
-     - Otherwise it's an **inverted body**: add F to the positive set and emit W011.
-   - If the result's volume differs from the sum of the positive volumes, shells overlapped: emit W010.
+3. Shell normalization, only when `decompose()` returns more than one component, or one
+   component with a negative volume (a model inside-out as a whole; r5) (ADR-0007):
+   - (Rewritten in r5 after the review.) Each shell, as a solid, gets a container: the
+     smallest other shell it lies inside (`(S − T).volume()` ≤ 1e-6 × `S.volume()`).
+   - Roles, from the outside in: a shell without a container is a solid, turned the right way
+     out if it faces inwards (W011), unless it lies inside the union of the outermost solids
+     (a void spanning overlapping solids). A shell facing the same way as its container plays
+     the same role; facing the other way, the opposite role (a void in a solid, a ball in the
+     void, and so on at any depth).
+   - Each solid shell minus the voids it directly contains is a piece; the result is the union
+     of the pieces (minus the spanning voids). A void is never subtracted from a shell that
+     doesn't contain it.
+   - If the union of the pieces is smaller than the sum of their volumes, shells overlapped:
+     emit W010.
    - **Never union every component blindly.** `batch_boolean(decompose(), Add)` fills voids: at plan
      time it turned the hollow sphere solid (14.1M mm³ instead of 557k).
 4. `--simplify TOL` (when > 0): `Manifold.simplify(TOL)` after normalization. Surfaces move by less
    than TOL and the result stays manifold.
 5. Log a summary: triangles, bounding box, volume, bodies, voids, repair steps.
-6. The normalized volume becomes the **reference volume** for every later volume check (I3, Phase 11).
+6. The volume of the returned body, after `--simplify`, becomes the **reference volume** for
+   every later volume check (I3, Phase 11): that body is the one cut (r5).
+7. A result that encloses no volume (a closed but flat surface) is a repair error (exit 2);
+   a `--simplify` tolerance that erases the model is an input error naming the option (exit 1).
 
 **Tests** (fixtures from Appendix D).
 - Clean cube: volume within 1e-6 relative; the report says no repair was done.
@@ -1112,14 +1126,28 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
   merge-on-load behaviour.
 - Cube missing a face: repaired, with W007.
 - Sphere missing a cap: exit 2, and the message includes the open-edge count.
-- Two cubes touching along one edge:
-  - exit 2 without `--deep-repair`;
+- Cube with a stray triangle on one edge (r5; it replaces two cubes touching along an edge,
+  which manifold3d accepts as is):
+  - exit 2 without `--deep-repair`, the message giving 2 open edges, 1 non-manifold edge,
+    1 body;
   - repaired with it (test skipped if pymeshlab isn't installed).
+- Two cubes touching along one edge: accepted as is, as two bodies (r5).
 - Overlapping shells (two 20 mm cubes offset by 10 mm): volume 12 000 mm³ and W010.
 - Hollow sphere (r = 150, 2 mm shell): the void is kept, volume = ⁴⁄₃π(150³ − 148³) within 1 %.
+- Ball inside the hollow sphere's void: kept, no W010 (r5); a void inside that ball: kept too.
 - Inverted body next to a normal cube: both kept, total volume = sum of both, W011.
+- A single inside-out cube: flipped, +1000 mm³, W011 (r5).
+- The hollow sphere inside out as a whole: the void is kept, W011 (r5, review).
+- The hollow sphere with the one reversed triangle trimesh orients a shell by: the void is kept
+  (r5, review).
+- Two overlapping hollow spheres: their walls are kept, W010 (r5, review).
+- A cube embedded in a bigger cube: absorbed, W010; a void across two overlapping cubes: kept,
+  with or without a body floating in it; a duplicated body (outwards or inside out): merged.
+- `--simplify` larger than the model: exit 1 naming `--simplify` (r5, review).
 - Two separate bodies: both kept.
-- `--simplify 0.05` on a dense sphere: fewer triangles, volume within 0.5 %.
+- A closed flat surface: exit 2 (r5).
+- `--simplify 0.05` on a dense sphere: fewer triangles, volume within 0.5 %; the reference
+  volume is the simplified body's.
 
 **Docs.**
 - `docs/ALGORITHMS.md` "Repair and shell normalization".
@@ -1817,7 +1845,19 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `soup_cube` | Unmerged triangles built with `process=False`, written to STL | Merge on load |
 | `missing_face_cube` | Cube without two triangles | `fill_holes`, W007 |
 | `capless_sphere` | Sphere without a cap | Exit 2 |
-| `edge_touching_cubes` | Two cubes sharing one edge | Non-manifold input, exit 2, `--deep-repair` |
+| `edge_touching_cubes` | Two cubes sharing one edge | Accepted as is by manifold3d: two bodies (r5) |
+| `finned_cube` | Cube with a stray triangle on one edge | Non-manifold input, exit 2, `--deep-repair` (r5) |
+| `inside_out_cube` | One cube with reversed winding | Single inverted shell, W011 (r5) |
+| `ball_in_hollow_sphere` | `hollow_sphere` plus a ball r = 100 in its void | Nesting (r5) |
+| `void_in_ball_in_hollow_sphere` | `ball_in_hollow_sphere` plus a void r = 50 in the ball | Two levels of nesting (r5) |
+| `inside_out_hollow_sphere` | `hollow_sphere` with every triangle reversed | Whole model inside out (r5) |
+| `hollow_sphere_with_a_flipped_triangle` | `hollow_sphere` with the reference triangle of one shell reversed | Majority orientation in basic repair (r5) |
+| `overlapping_hollow_spheres` | Two `hollow_sphere`s 200 mm apart | Overlapping hollow parts keep their walls (r5) |
+| `embedded_cube` | A 5 mm cube inside a 20 mm cube, both facing out | Redundant part, W010 (r5) |
+| `void_across_two_cubes(body_inside)` | Two overlapping cubes and a void inside their union only, optionally with a small cube in the void | Void spanning solids (r5) |
+| `duplicated_cube(inside_out)` | The same cube twice | Identical shells merged, W010 (r5) |
+| `flat_sheet` | A square, its two triangles facing both ways | Closed but no volume, exit 2 (r5) |
+| `dense_sphere` | `Manifold.sphere(20, 256)` | `--simplify` |
 | `tall_figure` | Stacked boxes with a thin neck | Nudging |
 | `plinth_step` | 10 × 10 × 20 box on a 40 × 40 × 10 plinth | Contact region at a step |
 | `overhang_step` | 40 × 40 × 10 plate on a 10 × 10 × 10 column | Contact region, other step direction |
@@ -1827,6 +1867,52 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Asymmetric L-shaped polycube | No mirroring |
 
 ## Appendix E — Plan revisions
+
+**r5 — 2026-11-19 (Phase 2).** Found while planning and implementing Phase 2, agreed with the
+maintainer:
+
+- **Shell normalization ran too rarely:** a model inside-out as a whole is one component with
+  a negative volume (manifold3d accepts it: `NoError`, −1000 mm³ for a cube), so "only when
+  `decompose()` returns more than one component" let it through and broke I1. Normalization
+  now also runs for a single negative component, which is flipped (W011).
+- **A body inside a void was deleted:** subtracting a void also removed a ball loose inside it
+  (a ball r = 100 in the hollow sphere came out at 554 829 mm³ instead of 4 719 966) and
+  raised a false W010. First fixed for one level of nesting, then superseded by the rewrite
+  below.
+- **Shell normalization rewritten after the Phase 2 review.** The sign-only classification
+  still gave wrong volumes with exit 0: a hollow sphere inside out as a whole came out solid
+  (14.06M mm³ instead of 554 829), and two overlapping hollow spheres lost their walls where
+  each crosses the other's void (927 978 mm³ instead of 1 106 891), because every void was
+  subtracted from the union of every solid. Now each shell's role comes from its orientation
+  relative to the smallest shell containing it, and a void is subtracted only from that
+  shell. Nesting works at any depth. Still sign-aware, as ADR-0007 decided.
+- **Basic repair keeps each shell's majority orientation:** trimesh's `fix_winding` (inside
+  `fix_normals`) orients each shell like one reference triangle; with that triangle reversed
+  in a hollow sphere's void, it reversed the other 2047 and the void was filled. A shell where
+  more than half the faces changed is reversed back (spike check
+  `trimesh.fix_winding_reference_face`).
+- **W010 wording:** comparing the final volume with the sum of the positive volumes would flag
+  every hollow model; the check compares the union of the solid pieces with the sum of their
+  volumes.
+- **`--simplify` erasing the model** exits 1 naming the option, instead of exit 2 blaming the
+  mesh (found by the review).
+- **Reference volume:** measured after `--simplify`, not just after normalization, since the
+  simplified body is the one cut (simplify may move the volume by up to 0.5 %, I3 allows
+  0.1 %).
+- **Edge-touching cubes aren't a repair case:** manifold3d accepts two cubes sharing one edge
+  as is (the four half-edges pair up: `NoError`, two shells, 2000 mm³), so "exit 2 without
+  `--deep-repair`" couldn't hold. The `--deep-repair` tests use `finned_cube` (a stray
+  triangle on an edge) instead, and edge-touching cubes are tested as accepted.
+- **Empty result:** a closed but flat surface is a valid, empty manifold; it is now exit 2.
+- **Loading:** the file is read with `file_type="stl"` whatever its extension. trimesh drops
+  triangles with a non-finite coordinate while loading, so no separate NaN check is needed
+  (spike check `trimesh.load_drops_non_finite`).
+- **CI:** the Linux 3.13 job and the weekly upgrade job install the `deep-repair` extra, so
+  the pymeshlab code runs somewhere; the spike reports the pymeshlab check as skipped when the
+  extra isn't installed. `pymeshlab>=2025.7.post1` is the verified minimum. The first CI run
+  showed that pymeshlab's filter plugins need the system's `libOpenGL.so.0` (absent from the
+  Ubuntu image): CI installs `libopengl0`, and a missing filter is now an exit 2 saying what
+  to install instead of an `AttributeError` (exit 4).
 
 **r4 — 2026-11-19 (Phase 1).** Gaps in §7.5 found while planning Phase 1, agreed with the
 maintainer:

@@ -41,7 +41,7 @@ dev = [
     "mypy>=2.4",
 ]
 # GPL-3.0; imported lazily, only with --deep-repair (PLAN.md §2).
-deep-repair = ["pymeshlab"]
+deep-repair = ["pymeshlab>=2025.7.post1"]
 
 [project.scripts]
 stlsplit = "stlsplit.cli:main"

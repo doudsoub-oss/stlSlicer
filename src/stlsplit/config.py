@@ -55,6 +55,19 @@ Without it, float rounding in L_max − k·Δ can drop a standard length equal t
 example 16 − 64 × 0.1 < 3.2 × 3 in floats).
 """
 
+SCALE_WARNING_MIN = 1.0
+"""W006 when the model's largest dimension is below this, mm (§4.5): probably not in mm."""
+SCALE_WARNING_MAX = 5000.0
+"""W006 when the model's largest dimension is above this, mm (§4.5): probably not in mm."""
+
+VOID_RESIDUAL_FRACTION = 1e-6
+"""Shell normalization (Phase 2, ADR-0007): an inside-out shell F is a void when
+``(F − union of the solids).volume() ≤ this · F.volume()``, i.e. F lies inside the solids.
+The same test decides whether a solid lies inside a void."""
+SHELL_OVERLAP_FRACTION = 1e-6
+"""W010 when the union of the solids is smaller than the sum of their volumes by more than
+this fraction (Phase 2): boolean round-off stays far below it, a real overlap far above."""
+
 TOML_INT_MIN = -(2**63)
 TOML_INT_MAX = 2**63 - 1
 """Integer range of the TOML spec; ``tomllib`` accepts any size, so it is checked here."""

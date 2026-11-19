@@ -3,12 +3,15 @@
 Last stage of the pipeline (PLAN.md §5.1) and, with ``io``, the only module that touches the
 file system. ``main`` parses the arguments, works out the mode (§7.1), builds one validated
 ``Config`` (built-in defaults ← TOML file ← options typed on the command line; §7.4,
-ADR-0011), checks the input file, prepares the output directory (§7.6), runs the stages and
-turns their diagnostics into the exit code (§4.5). Every failure becomes one line on stderr;
-``-v`` adds the traceback.
+ADR-0011), loads and repairs the input, prepares the output directory (§7.6), runs the stages
+and turns their diagnostics into the exit code (§4.5). Every failure becomes one line on
+stderr; ``-v`` adds the traceback.
 
-Phase 1: no stage exists yet, so the split, dry-run and calibration modes stop with a warning
-once the checks above have passed.
+Load and repair run before the output directory is prepared, so an unusable input never
+creates the directory, and ``--force`` never deletes the previous outputs for it.
+
+Phase 2: the stages after repair don't exist yet, so the split and dry-run modes stop with a
+warning after repair, and the calibration mode after the checks.
 """
 
 import argparse
@@ -23,7 +26,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, NoReturn
 
-from stlsplit import __version__, config, io
+from manifold3d import Manifold
+
+from stlsplit import __version__, config, io, repair
 from stlsplit.config import Config
 from stlsplit.errors import ConfigError, ExitCode, InputError, StlsplitError, exit_code_for
 from stlsplit.models import Diagnostic
@@ -418,8 +423,17 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if mode is Mode.PRINT_CONFIG:
         sys.stdout.write(config.to_toml(cfg))
         return ExitCode.SUCCESS
+    exit_code = ExitCode.SUCCESS
     if mode is not Mode.CALIBRATE:
-        _require_input_file(ns.input)
+        # Each stage's diagnostics are logged as soon as it returns, so a load warning (W006)
+        # is still shown when repair then fails.
+        with stage("load"):
+            mesh, loaded = io.load_stl(ns.input, cfg.model.scale)
+        exit_code = max(exit_code, report_diagnostics(loaded))
+        with stage("repair"):
+            body, report = repair.prepare(mesh, cfg)
+        LOGGER.info("%s", _model_summary(body, report))
+        exit_code = max(exit_code, report_diagnostics(report.diagnostics))
     if mode is Mode.DRY_RUN:
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
@@ -427,11 +441,29 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         with stage("output directory"):
             io.prepare_output_dir(ns.output, force="force" in ns)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 2 onwards); stopping after the checks",
+        "the %s mode is not implemented yet (PLAN.md Phase 3 onwards); stopping here",
         mode.value,
     )
-    diagnostics: list[Diagnostic] = []
-    return report_diagnostics(diagnostics)
+    return exit_code
+
+
+def _model_summary(body: Manifold, report: repair.RepairReport) -> str:
+    """One line about the repaired model, input frame (PLAN.md Phase 2, task 5). ASCII only."""
+    box = body.bounding_box()
+    low, high = box[:3], box[3:]
+    size = " x ".join(f"{b - a:.6g}" for a, b in zip(low, high, strict=True))
+    corner = ", ".join(f"{a:.6g}" for a in low)
+    triangles = _plural(body.num_tri(), "triangle")
+    bodies = _plural(report.bodies, "body", "bodies")
+    return (
+        f"model: {triangles}, {bodies}, {_plural(report.voids, 'void')}; "
+        f"{size} mm from ({corner}); volume {report.reference_volume:.10g} mm^3; "
+        f"repair: {'; '.join(report.steps) if report.steps else 'none'}"
+    )
+
+
+def _plural(number: int, singular: str, plural: str | None = None) -> str:
+    return f"{number} {singular if number == 1 else plural or singular + 's'}"
 
 
 def _describe_sources(ns: argparse.Namespace) -> str:
@@ -461,13 +493,6 @@ def _read_config_file(path: Path) -> str:
     except UnicodeDecodeError as exc:
         name = "UTF-16" if utf16 else "UTF-8"
         raise InputError(f"--config {path}: not valid {name} text ({exc.reason})") from exc
-
-
-def _require_input_file(path: Path) -> None:
-    if not path.exists():
-        raise InputError(f"INPUT {path}: no such file")
-    if not path.is_file():
-        raise InputError(f"INPUT {path} is not a file")
 
 
 def _option(

@@ -1,15 +1,19 @@
-"""Thin wrappers around the geometry libraries: conversions, frames, cylinders, sections, rays.
+"""Thin wrappers around the geometry libraries: conversions, repair, frames, cylinders, rays.
 
 Used by every geometric stage of the pipeline (PLAN.md §5.1). All solid geometry goes through
-manifold3d; trimesh appears here only for conversions (ADR-0001). Every function is pure.
+manifold3d; trimesh appears here only for conversions and basic mesh repair, and pymeshlab
+(optional, GPL-3.0) only for deep repair, imported when it runs (ADR-0001, ADR-0007). Every
+function is pure: repair functions work on a copy of their input.
 
 Inputs and outputs are in mm. Unless stated otherwise, solids are in the cutting frame and 2D
 data is in plane-local (u, v) coordinates (§4.2, docs/ARCHITECTURE.md "Frames"). The section
 helpers (``cut_region`` and friends) arrive in Phase 4.
 """
 
+import importlib.util
 import math
 from collections.abc import Iterable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 import trimesh
@@ -57,6 +61,202 @@ def to_trimesh(body: Manifold) -> trimesh.Trimesh:
     vertices = np.array(mesh.vert_properties[:, :3], dtype=np.float64)
     faces = np.array(mesh.tri_verts, dtype=np.int64)
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+class MeshDefects(NamedTuple):
+    """What keeps a mesh from being a closed solid, for the "can't repair" message.
+
+    Attributes:
+        open_edges: Edges used by one triangle only (the rims of holes).
+        non_manifold_edges: Edges shared by more than two triangles.
+        bodies: Connected groups of vertices.
+    """
+
+    open_edges: int
+    non_manifold_edges: int
+    bodies: int
+
+
+def mesh_defects(mesh: trimesh.Trimesh) -> MeshDefects:
+    """Count the defects of a triangle mesh.
+
+    Args:
+        mesh: Triangle mesh with merged vertices, any frame.
+
+    Returns:
+        The counts.
+    """
+    edges = np.sort(np.asarray(mesh.edges, dtype=np.int64), axis=1)
+    _, uses = np.unique(edges, axis=0, return_counts=True)
+    return MeshDefects(
+        open_edges=int(np.count_nonzero(uses == 1)),
+        non_manifold_edges=int(np.count_nonzero(uses > 2)),
+        bodies=int(mesh.body_count),
+    )
+
+
+def basic_repair(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, tuple[str, ...]]:
+    """Apply trimesh's basic repair steps to a copy of ``mesh`` (PLAN.md Phase 2, ADR-0007).
+
+    In order: merge duplicate vertices; drop degenerate faces, then duplicate faces; drop
+    unreferenced vertices; make the winding consistent (:func:`_orient_faces`); close holes of
+    one triangle or one quad with ``fill_holes``.
+
+    Args:
+        mesh: Triangle mesh, mm, input frame.
+
+    Returns:
+        The repaired copy, and a description of each step that changed something, in the
+        order applied (empty if nothing changed).
+    """
+    fixed = mesh.copy()
+    steps: list[str] = []
+
+    def record(count: int, text: str) -> None:
+        if count:
+            steps.append(f"{text}: {count}")
+
+    before = len(fixed.vertices)
+    fixed.merge_vertices()
+    record(before - len(fixed.vertices), "duplicate vertices merged")
+    before = len(fixed.faces)
+    fixed.update_faces(fixed.nondegenerate_faces())
+    record(before - len(fixed.faces), "degenerate faces removed")
+    before = len(fixed.faces)
+    fixed.update_faces(fixed.unique_faces())
+    record(before - len(fixed.faces), "duplicate faces removed")
+    before = len(fixed.vertices)
+    fixed.remove_unreferenced_vertices()
+    record(before - len(fixed.vertices), "unreferenced vertices removed")
+    record(_orient_faces(fixed), "faces re-oriented")
+    before = len(fixed.faces)
+    trimesh.repair.fill_holes(fixed)
+    record(len(fixed.faces) - before, "triangles added to close holes")
+    return fixed, tuple(steps)
+
+
+def _orient_faces(mesh: trimesh.Trimesh) -> int:
+    """Make the winding consistent within each shell, keeping the shell's majority orientation.
+
+    This is ``fix_normals(multibody=False)`` with one change. trimesh's ``fix_winding`` makes
+    every face of a connected group agree with one reference face (the group's first face in
+    ``face_adjacency`` order), not with the majority, so one reversed triangle could reverse
+    the 2047 good ones of a hollow sphere's void and fill it (docs/LIBRARY_NOTES.md). A group
+    where more than half the faces changed is therefore reversed back. Then
+    ``fix_inversion(multibody=False)`` reverses the whole mesh if its volume is negative.
+    Never ``multibody=True``: it turns internal voids outward (ADR-0007).
+
+    Args:
+        mesh: Triangle mesh with merged vertices; modified in place.
+
+    Returns:
+        The number of faces whose winding changed.
+    """
+    original = np.array(mesh.faces)
+    trimesh.repair.fix_winding(mesh)  # type: ignore[no-untyped-call]  # unannotated in trimesh
+    changed = (mesh.faces != original).any(axis=1)
+    faces = np.array(mesh.faces)
+    for group in trimesh.graph.connected_components(
+        mesh.face_adjacency, nodes=np.arange(len(faces))
+    ):
+        if 2 * np.count_nonzero(changed[group]) > len(group):
+            faces[group] = faces[group][:, ::-1]
+    mesh.faces = faces
+    trimesh.repair.fix_inversion(mesh, multibody=False)
+    return int(np.count_nonzero((mesh.faces != original).any(axis=1)))
+
+
+DEEP_REPAIR_INSTALL = 'pip install "stlsplit[deep-repair]"'
+"""How to install pymeshlab, for messages."""
+
+PYMESHLAB_FILTERS: tuple[str, ...] = (
+    "meshing_repair_non_manifold_edges",
+    "meshing_repair_non_manifold_vertices",
+    "meshing_close_holes",
+    "meshing_re_orient_faces_coherently",
+)
+"""The ``MeshSet`` filters deep repair applies, in this order."""
+
+
+def deep_repair_problem() -> str | None:
+    """Return why deep repair can't run, or ``None`` if it can.
+
+    pymeshlab is imported only when it is installed, and only from here and
+    :func:`deep_repair` (it is GPL-3.0, PLAN.md §2). Its filters are plugins that need system
+    libraries: without the OpenGL library ``libOpenGL.so.0``, the plugin holding
+    ``meshing_close_holes`` doesn't load and the filter is simply missing
+    (docs/LIBRARY_NOTES.md).
+
+    Returns:
+        ``None``, or one line saying what is missing and how to fix it.
+    """
+    if importlib.util.find_spec("pymeshlab") is None:
+        return f"pymeshlab is not installed ({DEEP_REPAIR_INSTALL})"
+    import pymeshlab  # optional extra, imported only when deep repair is needed
+
+    meshes = pymeshlab.MeshSet()
+    missing = [name for name in PYMESHLAB_FILTERS if not hasattr(meshes, name)]
+    if not missing:
+        return None
+    return (
+        f"pymeshlab didn't load the filter{'s' if len(missing) > 1 else ''} "
+        f"{', '.join(missing)}, usually because the system's OpenGL library libOpenGL.so.0 "
+        "is missing (Debian and Ubuntu package: libopengl0)"
+    )
+
+
+def deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
+    """Repair a copy of ``mesh`` with pymeshlab (``--deep-repair``, PLAN.md Phase 2).
+
+    Removes non-manifold edges, then non-manifold vertices, closes holes and re-orients the
+    faces coherently. pymeshlab is GPL-3.0, so it is imported here only (PLAN.md §2).
+
+    Args:
+        mesh: Triangle mesh, mm, input frame. :func:`deep_repair_problem` must have
+            returned ``None``.
+
+    Returns:
+        The repaired mesh, or ``None`` if pymeshlab refused one of the filters.
+    """
+    import pymeshlab  # optional extra, imported only when deep repair runs
+
+    meshes = pymeshlab.MeshSet()
+    meshes.add_mesh(
+        pymeshlab.Mesh(
+            vertex_matrix=np.asarray(mesh.vertices, dtype=np.float64),
+            face_matrix=np.asarray(mesh.faces, dtype=np.int32),
+        )
+    )
+    try:
+        for name in PYMESHLAB_FILTERS:
+            getattr(meshes, name)()
+    except pymeshlab.PyMeshLabException:
+        return None
+    result = meshes.current_mesh()
+    return trimesh.Trimesh(
+        vertices=np.asarray(result.vertex_matrix(), dtype=np.float64),
+        faces=np.asarray(result.face_matrix(), dtype=np.int64),
+        process=False,
+    )
+
+
+def reverse_winding(body: Manifold) -> Manifold:
+    """Return ``body`` with every triangle's winding reversed: an inside-out shell turns solid.
+
+    Vertices go through ``to_mesh()`` (float32). That is exact for shells straight out of
+    ``decompose()`` on a mesh built by :func:`to_manifold`, the only use (``repair``).
+
+    Args:
+        body: Solid or inside-out shell, mm.
+
+    Returns:
+        The same surface with the opposite orientation, so the opposite signed volume.
+    """
+    mesh = body.to_mesh()
+    # np.array copies: to_mesh() arrays are read-only views, which Mesh() rejects.
+    vertices = np.array(mesh.vert_properties[:, :3], dtype=np.float32)
+    faces = np.array(mesh.tri_verts[:, ::-1], dtype=np.uint32)
+    return Manifold(Mesh(vert_properties=vertices, tri_verts=faces))
 
 
 def world_to_local(axis: Axis) -> NDArray[np.float64]:

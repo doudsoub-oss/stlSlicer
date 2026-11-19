@@ -1,12 +1,15 @@
+import struct
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
+import trimesh
 from manifold3d import Manifold
 
 from stlsplit import cli, io
 from stlsplit.errors import ConfigError, ExitCode, InputError
-from tests.conftest import cube
+from tests.conftest import cube, manifold_to_trimesh
 
 WriteStl = Callable[[Manifold, str], Path]
 
@@ -160,3 +163,80 @@ def test_missing_absolute_label_font_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as exc:
         io.resolve_label_font(str(tmp_path / "missing.ttf"))
     assert exc.value.key == "advanced.label_font"
+
+
+# --- STL loading (PLAN.md Phase 2) -----------------------------------------------------------
+
+
+def test_load_stl_reads_a_cube_without_diagnostics(write_stl: WriteStl) -> None:
+    mesh, diagnostics = io.load_stl(write_stl(cube(), "model"), 1.0)
+    assert len(mesh.faces) == 12
+    assert mesh.extents == pytest.approx((10.0, 10.0, 10.0))
+    assert diagnostics == []
+
+
+def test_load_stl_applies_the_scale(write_stl: WriteStl) -> None:
+    mesh, _ = io.load_stl(write_stl(cube(), "model"), 2.5)
+    assert mesh.extents == pytest.approx((25.0, 25.0, 25.0))
+
+
+@pytest.mark.parametrize(
+    "scale",
+    [
+        pytest.param(0.05, id="0.5mm"),
+        pytest.param(600.0, id="6m"),
+    ],
+)
+def test_suspicious_scale_gives_w006(write_stl: WriteStl, scale: float) -> None:
+    _, diagnostics = io.load_stl(write_stl(cube(), "model"), scale)
+    assert [d.code for d in diagnostics] == ["W006"]
+    assert "--scale" in diagnostics[0].message
+
+
+def test_triangle_with_a_non_finite_coordinate_is_dropped_on_load(tmp_path: Path) -> None:
+    # trimesh removes it while loading (docs/LIBRARY_NOTES.md), so NaN never reaches repair:
+    # the cube loses nothing but the planted triangle.
+    mesh = manifold_to_trimesh(cube())
+    vertices = np.vstack([mesh.vertices, [(np.nan, 0.0, 0.0)]])
+    faces = np.vstack([mesh.faces, [(0, 1, len(mesh.vertices))]])
+    path = tmp_path / "nan.stl"
+    trimesh.Trimesh(vertices, faces, process=False).export(path, file_type="stl")
+    loaded, _ = io.load_stl(path, 1.0)
+    assert len(loaded.faces) == 12
+    assert np.isfinite(loaded.vertices).all()
+
+
+def test_missing_input_file_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(InputError, match="no such file"):
+        io.load_stl(tmp_path / "missing.stl", 1.0)
+
+
+def test_input_that_is_a_directory_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(InputError, match="not a file"):
+        io.load_stl(tmp_path, 1.0)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(b"\x00\x01this is not an STL file" * 3, id="garbage"),
+        pytest.param(b"solid empty\nendsolid empty\n", id="ascii-without-triangles"),
+    ],
+)
+def test_file_without_triangles_is_rejected(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "model.stl"
+    path.write_bytes(content)
+    with pytest.raises(InputError, match="no triangles") as exc:
+        io.load_stl(path, 1.0)
+    assert exc.value.exit_code == ExitCode.INVALID_INPUT
+
+
+def test_truncated_binary_stl_is_rejected(tmp_path: Path) -> None:
+    # The header announces 5 triangles but the file holds 1; trimesh then raises.
+    triangle = struct.pack("<12f", 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0) + b"\x00\x00"
+    path = tmp_path / "truncated.stl"
+    path.write_bytes(b"\x00" * 80 + struct.pack("<I", 5) + triangle)
+    with pytest.raises(InputError) as exc:
+        io.load_stl(path, 1.0)
+    assert "truncated.stl" in str(exc.value)
