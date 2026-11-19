@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r6** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r7** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -67,7 +67,7 @@ what surprised you, what to watch.
 | 1 | Configuration and CLI shell | done | `e869e3b` | For Phase 2: `io.py` exists (output-directory policy, `OWNED_OUTPUTS`, label-font lookup); `io.load_stl` goes there. `cli._run` stops every mode with a "not implemented yet" warning after the checks: replace that stub as stages land; `cli._require_input_file` can move into `io.load_stl`. Stages build diagnostics with `errors.diagnostic()` and return them; `cli.report_diagnostics()` turns them into the exit code. Numbers come from `config.derived(cfg)` only. `pin_length_step` ≥ 0.1 and `circular_segments` ≤ 256 were added after the review (r4). Still open: in dowel mode `connectors.length` has no upper bound, so a huge `--dowel-length` would make `derived()` build (L_max − L_min) / 0.1 standard lengths; bound it (e.g. by the usable volume) when Phase 5 starts using the lengths. `--print-config` writes ASCII; `--config` reads UTF-8 (BOM or not) and UTF-16 with a BOM, for Windows. Symlink tests skip only if the OS refuses to create a symlink. The review found two bugs (huge TOML integers exited 4; the Windows `--print-config > file` round trip), both fixed and tested (PLAN r4). |
 | 2 | Load, repair, shell normalization | done | `f7e568d`, `8d8e6d2` (tag `v0.2.0`) | For Phase 3: `cli._run` loads and repairs (`io.load_stl` → `repair.prepare` → body in the **input frame** plus `RepairReport.reference_volume`, measured after `--simplify`), then stops with a "not implemented yet (Phase 3 onwards)" warning: replace that stub with `grid.orient`. Load and repair run before `io.prepare_output_dir` on purpose (a broken input never touches `-o`). The CLI logs each stage's diagnostics as soon as it returns and keeps the highest exit code. Plan changes in Appendix E r5: the review found that the sign-only shell normalization filled voids (whole model inside out; overlapping hollow parts), so roles now come from containment plus relative orientation, any nesting depth; basic repair keeps each shell's majority orientation (trimesh's `fix_winding` follows one reference face). Edge-touching cubes are valid as is; `finned_cube` is the `--deep-repair` fixture. Fixture gotcha: `Manifold.compose` collapses inside-out shells, so build reversed shells with trimesh concatenation (`tests/conftest.py`). pymeshlab is installed only in the Linux 3.13 and weekly CI jobs; locally `pip install -e ".[dev,deep-repair]"`. Its filter plugins need the system's `libOpenGL.so.0` (Ubuntu: `libopengl0`, installed in CI); without it `geometry.deep_repair_problem()` makes `--deep-repair` exit 2 with that cause instead of crashing (`8d8e6d2`). |
 | 3 | Orientation and even grid | done | `b354c40`, `f63cee3` (tag `v0.3.0`) | For Phase 4: `cli._run` now runs `grid.orient` → `grid.even_grid` after repair, then stops with a "not implemented yet (Phase 4 onwards)" warning: replace that stub with `cutting.split_cells`. From there `body` is in the **cutting frame** (bounding-box minimum exactly at the origin, LIBRARY_NOTES `manifold.signed_permutation_exact`) and `layout` is the `Grid`; `grid.axis_bounds`, `grid.cell_indices` (sorted (i, j, k)) and `grid.cell_bounds` give the cells. `Orientation.input_to_cutting` (4×4, tuples) is for `assembly.json` in Phase 9. Plan changes in Appendix E r6: the cell-fit check is relative (`≤ U · (1 + GRID_TOLERANCE)`; the absolute `U + 1e-9` contradicted the count's relative slack) and, after the review, evaluated in the count's own arithmetic (`grid.fits`: `size / U − tol ≤ 1`), since `size <= U * (1 + tol)` rounded the other way for one float and a valid box exited 4 (`f63cee3`); use `grid.fits` whenever nudging (Phase 6) checks a cell; the six rotations and their tie order are in `grid.ROTATIONS`; `Orientation` lives in `models`; the dry-run plan goes to stdout (`cli.dry_run_report`, extend it as stages land), logs to stderr. First hypothesis tests: `tests/conftest.py` loads a derandomized `ci` profile when `CI` is set. `chiral_l` is a three-armed corner, not a flat L (a flat L is its own mirror image). The grid has no upper bound on the cell count (a 5 m model on a tiny bed): Phase 10 territory. |
-| 4 | Sections, cutting, cut faces, small-piece merge | todo | | |
+| 4 | Sections, cutting, cut faces, small-piece merge | done | branch `phase-04-cutting` | For Phase 5: `cli._run` now runs `cutting.cut` after the grid (pieces, faces, W004/W005/W008; I1 and I3 checked, `AssertionError` = exit 4), then stops with a "not implemented yet (Phase 5 onwards)" warning: replace that stub with `connectors.place`. Faces are `models.CutFace` with the region in plane-local (u, v), from the normalized body (ADR-0002); `geometry.section`, `polylabel_point`, `shadow`, `grow`, `prism`, `rectangle`, `bodies`, `split_at` and `clip` are there to reuse. Pieces without faces (W008) get no connectors. **Cut solids only by difference** (`geometry.split_at`, `geometry.clip`): `split_by_plane`, `trim_by_plane` and `^` leave a zero-thickness flap where a model face lies on the cut (spike `manifold.coplanar_cuts`); this matters for Phase 7's booleans too. Plan changes in Appendix E r7: a merged piece is cut again from the body, never glued (a union of split halves keeps an internal face when the plane passes through mesh vertices; spike `manifold.union_of_split_halves`); bodies keep their voids (`decompose()` returns voids as separate inside-out shells); `geometry.reverse_winding` now goes through `Mesh64` (float64); `cutting` imports `grid`; three bugs found by the review (flaps, merged body picked by volume, prisms reaching other cells), fixed and tested. Performance: `polylabel` at 1e-3 mm is slow on thin regions (about 30 ms for a 2 mm ring); `geometry.polylabel_point` caches it, which took the hollow sphere on 27 cells from 3.4 s to 0.4 s. The merge (booleans on two cells) and polylabel are the hot spots to watch in Phase 10. |
 | 5 | Connector placement | todo | | |
 | 6 | Plane nudging | todo | | |
 | 7 | Tool solids, booleans, dowels, calibration kit | todo | | |
@@ -235,7 +235,7 @@ stlsplit/
 | `repair` | Try-first repair, shell normalization | `geometry` |
 | `connectors` | Connector placement (2D candidates + 3D checks) | `geometry` |
 | `grid` | Usable volume, auto-orient, even grid, plane nudging | `geometry`, `connectors` (for `safe_region`) |
-| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry` |
+| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` (r7) |
 | `labels` | Text outlines and layout on a face | `geometry` |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` |
 | `calibrate` | Calibration kit | `tools`, `labels` |
@@ -284,7 +284,7 @@ Plane-local axes (verified at plan time with `Manifold.transform` followed by `s
 | Thing | Format | Example | Ordering rule |
 |---|---|---|---|
 | Cell | (i, j, k), 0-based along X, Y, Z | (1, 0, 2) | |
-| Piece | `X{i}-Y{j}-Z{k}`, plus `-a`, `-b`, … when the cell holds several bodies | `X1-Y0-Z2-b` | Suffixes by (bbox min z, min y, min x, then larger volume first) |
+| Piece | `X{i}-Y{j}-Z{k}`, plus `-a`, `-b`, … (after `-z`: `-aa`, `-ab`, …; r7) when the cell holds several bodies | `X1-Y0-Z2-b` | Suffixes by (bbox min z, min y, min x, then larger volume first); piece order is cell, then suffix |
 | Cut face | `{neg piece}~{pos piece}`, plus `#2`, `#3`, … when the same pair shares several regions | `X0-Y0-Z0~X1-Y0-Z0#2` | Regions by their polylabel point (u, v) |
 | Connector | `{face}/c{n}` | `X0-Y0-Z0~X1-Y0-Z0/c1` | Acceptance order (Phase 5) |
 | Label text | Grid digits plus suffix | `1-0-2b` | |
@@ -1244,12 +1244,16 @@ computed from a single source of truth.
    a plate on a column sliced at the step returned the plate (1600 mm²) instead of the 100 mm²
    contact. The intersection is correct in both step directions. This removes the need for any
    "keep planes away from coplanar faces" rule.
-2. `geometry.clip_to_cells(polygons, cell_a, cell_b)`: clip to the rectangle that two adjacent
-   cells share in the plane.
-3. Split the normalized body with `split_by_plane`: X planes first, then Y planes on each slab, then
-   Z planes. The first result is the side the normal points to. Drop empty results.
+2. `geometry.clip_to_cells(polygons, axis, cell_a, cell_b)`: clip to the rectangle that two
+   adjacent cells share in the plane.
+3. Split the normalized body: X planes first, then Y planes on each slab, then Z planes. Cut each
+   side by difference, the body minus a box covering the other side (`geometry.split_at`):
+   `split_by_plane`, `trim_by_plane` and intersections leave a zero-thickness flap where a model
+   face lies on the plane (r7). Drop empty results.
 4. Bodies:
-   - `decompose()` each cell and drop bodies under 1e-6 mm³.
+   - Split each cell into bodies, each an outer shell minus the voids it holds
+     (`geometry.bodies`), and drop bodies under 1e-6 mm³. `decompose()` alone returns a void
+     as an inside-out shell of its own; dropping it would fill the void (r7).
    - Order the rest by (bbox min z, min y, min x, larger volume first) and assign IDs per §4.3.
 5. Cut faces. For every plane and every pair of cells adjacent across it:
    1. region = `clip_to_cells(cut_region(normalized body, plane))`, split into connected polygons.
@@ -1260,18 +1264,26 @@ computed from a single source of truth.
    4. If no piece matches on a side, retry with 0.005 mm. If none matches still, skip the polygon
       and log it at debug level: it's too thin for a connector anyway.
    5. Create one `CutFace` per (polygon, neg piece, pos piece) with IDs per §4.3.
-6. Small-piece merge (ADR-0012), for each piece S with volume < V_small, in ID order. Merge S into
-   its neighbour P only if all of these hold:
+6. Small-piece merge (ADR-0012), for each piece S with volume < V_small, in piece order (cell,
+   then suffix; r7). Merge S into its neighbour P only if all of these hold:
    - S shares cut faces with **exactly one** piece P. With two or more, emit W004. With none, S is a
-     separate body: no merge, W008.
+     separate body: no merge (W008, below).
+   - S hasn't absorbed a piece itself: it would then span two cells, and the guard below is
+     defined for one (W004; r7).
    - The union's bounding box fits U (peg-adjusted).
    - **Footprint guard:** no other piece in S's cell overlaps S's projection along the axis of the
-     shared faces. Compute the projections with `project()` after rotating that axis to Z, and
-     treat an overlap area > 1e-6 mm² as an overlap. This guard keeps every assembly step a single
-     straight motion; the proof sketch belongs in `docs/ALGORITHMS.md`.
+     shared faces, grown by `MERGE_MARGIN` = 0.05 mm (r7). Compute the projections with
+     `project()` after rotating that axis to Z, and treat an overlap area > 1e-6 mm² as an
+     overlap. This guard keeps every assembly step a single straight motion; the proof sketch
+     belongs in `docs/ALGORITHMS.md`.
 
-   If they do: P ← P ∪ S, drop the faces between them, record S in `merged_from`, emit W005.
-   Otherwise emit W004.
+   If they do: cut P again from the normalized body, by difference, as P's cell joined to a prism
+   over S's grown projection kept within S's cell, so the plane is never cut there and nothing is
+   glued (a union P ∪ S keeps a face inside where the plane passes through mesh vertices; r7).
+   The merged piece is the body that holds S; if its volume isn't P + S within 1e-6, emit W004. Otherwise drop the faces between them, record S in
+   `merged_from`, emit W005. When a condition fails, emit W004. After the merges, every piece
+   without a cut face gets W008, unless the grid is a single cell (W012 already says nothing
+   was cut; r7).
 7. Validation: every piece has status `NoError`, and the piece volumes add up to the reference
    volume within 0.1 % (I3).
 
@@ -1888,6 +1900,62 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r7 — 2026-11-19 (Phase 4).** Found while planning and implementing Phase 4, agreed with the
+maintainer:
+
+- **A merged piece is cut, never glued.** `P ← P ∪ S` leaves a face inside the merged piece
+  whenever the plane passes through existing mesh vertices: 100 mm² in a box with a vertex
+  ring on the plane, 28–117 mm² for a rounded knob cut through its equator, still `NoError`
+  with the exact volume, so nothing noticed. The merged piece is now cut again from the
+  normalized body: the body trimmed to the cells involved, intersected with P's cell joined to
+  a prism over S's shadow grown by `MERGE_MARGIN` (0.05 mm). Inside the prism the plane is
+  never cut. If no resulting body has the volume P + S within `MERGE_VOLUME_TOLERANCE`
+  (1e-6), the merge is refused (W004). Spike check `manifold.union_of_split_halves`.
+- **The footprint guard uses the grown shadow** (`MERGE_MARGIN`), the footprint the prism
+  cuts with. Otherwise a piece closer than 0.05 mm to S's shadow passed the guard and the
+  prism took a sliver of it along (0.76 mm³, under the volume tolerance), so two pieces would
+  overlap.
+- **Bodies keep their voids.** `decompose()` returns a void as an inside-out shell of its own,
+  so task 4 as written ("drop bodies under 1e-6 mm³") deleted it and filled the void; a box
+  with a bubble away from the planes then failed I3 (exit 4). A body is now an outer shell
+  minus the voids it holds (`geometry.bodies`). `geometry.reverse_winding` goes through
+  `Mesh64` so the voids of split pieces, whose vertices are doubles, are reversed exactly
+  (spike check `manifold.decompose_void_shells`).
+- **`cutting` imports `grid`** (§3.1) for `cell_indices`, `cell_bounds` and `fits`: the fit
+  check of a merged piece uses the count's arithmetic, as r6 asks.
+- **Merge order and chains:** "ID order" is piece order (cell, then suffix), not string order
+  (`X10-…` sorts before `X2-…`). A piece that has absorbed a small piece is never merged
+  itself (W004): it spans two cells, and the guard is defined for one. The two small halves of
+  a tiny body still end as one piece: the first merges into the second, which has no cut face
+  left (W008).
+- **W008 for every piece without a cut face**, not only small ones (§4.5 describes it that
+  way, and Phases 5 and 8 skip those pieces), except when the grid is a single cell: W012
+  already says nothing was cut.
+- **Suffixes after `-z`** continue `-aa`, `-ab`, … (§4.3), so a cell with more than 26 bodies
+  still gets distinct IDs. Remaining ties in the body order keep `decompose()` order, which is
+  deterministic.
+- **`clip_to_cells` takes the plane axis** (task 2), and drops clipped parts of 1e-6 mm² or
+  less (`config.AREA_TOLERANCE`, also the footprint guard's overlap threshold).
+- **The CLI runs the cutting stage** after the grid, and the dry run lists the pieces and cut
+  faces (§7.1).
+- **Found by the Phase 4 review:**
+  - **Cuts by difference.** `split_by_plane` (task 3), `trim_by_plane` and intersections keep a
+    model face lying exactly on the plane as a zero-thickness two-sided sheet on the kept side.
+    A column on a plinth cut at the step had 4000 mm² of surface instead of 1000 and a 40 × 40
+    bounding box and shadow. That joined two columns standing on the plinth into one piece,
+    sorted suffixes by the wrong bounding box, and made a 180 mm³ nub on a plate fail the
+    footprint guard (W004 instead of W005) through the even grid itself. Each side is now cut as
+    the body minus a box covering the other side (`geometry.split_at`, `geometry.clip`); task 1's
+    "no rule keeping planes away from model faces" holds again. Spike check
+    `manifold.coplanar_cuts`; hypothesis property on boxes aligned with the planes
+    (`test_cutting_adds_no_surface_but_the_cut_faces`).
+  - **The merged body is the one holding S**, chosen by its overlap with S, not by volume alone:
+    with a second body of the same volume in P's cell, the merge took a copy of that body and
+    P ∪ S disappeared, with I3 still satisfied.
+  - **Each prism stays in its own cell.** A piece absorbing small pieces across two planes
+    clipped the body to their hull, and a grown prism reached into a neighbouring cell the guard
+    doesn't check: two pieces overlapped by 0.0072 mm³, under the volume tolerance.
 
 **r6 — 2026-11-19 (Phase 3).** Found while planning Phase 3, agreed with the maintainer:
 

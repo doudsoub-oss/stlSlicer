@@ -7,9 +7,13 @@ function is pure: repair functions work on a copy of their input.
 
 Inputs and outputs are in mm. Unless stated otherwise, solids are in the cutting frame and 2D
 data is in plane-local (u, v) coordinates (§4.2, docs/ARCHITECTURE.md "Frames"). The section
-helpers (``cut_region`` and friends) arrive in Phase 4.
+helpers (Phase 4) take a plane by its axis and offset: ``section``, ``cut_region`` (ADR-0002),
+``clip_to_cells``, ``shadow`` and ``prism``. Solids are cut with ``split_at`` and ``clip``,
+which work by difference: an intersection (``split_by_plane``, ``trim_by_plane``, ``^``) leaves
+a zero-thickness flap where a model face lies on the cut (docs/LIBRARY_NOTES.md).
 """
 
+import functools
 import importlib.util
 import math
 from collections.abc import Iterable, Sequence
@@ -17,13 +21,25 @@ from typing import NamedTuple
 
 import numpy as np
 import trimesh
-from manifold3d import CrossSection, FillRule, Manifold, Mesh, OpType
+from manifold3d import CrossSection, FillRule, JoinType, Manifold, Mesh, Mesh64, OpType
 from numpy.typing import ArrayLike, NDArray
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import polylabel
 
-from stlsplit.config import POLYLABEL_TOLERANCE
-from stlsplit.models import Axis
+from stlsplit.config import (
+    AREA_TOLERANCE,
+    CUTTER_PAD,
+    POLYLABEL_CACHE_SIZE,
+    POLYLABEL_TOLERANCE,
+    VOID_RESIDUAL_FRACTION,
+)
+from stlsplit.models import Axis, Plane
+
+Point3 = tuple[float, float, float]
+"""A point or a size in the cutting frame, mm."""
+Box = tuple[Point3, Point3]
+"""An axis-aligned box, (low corner, high corner), mm, cutting frame (``grid.cell_bounds``)."""
 
 # Rows of the world -> plane-local rotation per plane axis: local (x, y, z) = world axes
 # (§4.2). Each is a cyclic permutation, so det = +1 (ADR-0008).
@@ -243,8 +259,9 @@ def deep_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh | None:
 def reverse_winding(body: Manifold) -> Manifold:
     """Return ``body`` with every triangle's winding reversed: an inside-out shell turns solid.
 
-    Vertices go through ``to_mesh()`` (float32). That is exact for shells straight out of
-    ``decompose()`` on a mesh built by :func:`to_manifold`, the only use (``repair``).
+    Vertices go through ``to_mesh64()`` and ``Mesh64``, so they keep their double precision:
+    the result is exact for any shell, including the voids of split pieces, whose new
+    vertices are doubles (docs/LIBRARY_NOTES.md).
 
     Args:
         body: Solid or inside-out shell, mm.
@@ -252,11 +269,11 @@ def reverse_winding(body: Manifold) -> Manifold:
     Returns:
         The same surface with the opposite orientation, so the opposite signed volume.
     """
-    mesh = body.to_mesh()
-    # np.array copies: to_mesh() arrays are read-only views, which Mesh() rejects.
-    vertices = np.array(mesh.vert_properties[:, :3], dtype=np.float32)
-    faces = np.array(mesh.tri_verts[:, ::-1], dtype=np.uint32)
-    return Manifold(Mesh(vert_properties=vertices, tri_verts=faces))
+    mesh = body.to_mesh64()
+    # np.array copies: the arrays of to_mesh64() are read-only views, which Mesh64() rejects.
+    vertices = np.array(mesh.vert_properties[:, :3], dtype=np.float64)
+    faces = np.array(mesh.tri_verts[:, ::-1], dtype=np.uint64)
+    return Manifold(Mesh64(vert_properties=vertices, tri_verts=faces))
 
 
 def world_to_local(axis: Axis) -> NDArray[np.float64]:
@@ -355,17 +372,338 @@ def crosssection_to_polygons(section: CrossSection) -> list[Polygon]:
         Polygons with holes, sorted by their polylabel point (u, then v), the region order of
         §4.3. Outer contours have positive area in manifold3d, holes negative.
     """
+    return sorted_by_polylabel(_polygons(section))
+
+
+def _polygons(section: CrossSection) -> list[Polygon]:
+    """The components of a cross-section as shapely polygons, in ``decompose()`` order."""
     polygons: list[Polygon] = []
     for component in section.decompose():
         contours = [np.asarray(c, dtype=np.float64) for c in component.to_polygons()]
+        if not contours:  # an empty cross-section decomposes into one empty component
+            continue
         shells = [c for c in contours if _signed_area(c) > 0]
         holes = [c for c in contours if _signed_area(c) < 0]
         if len(shells) != 1:  # decompose() yields one outer contour per component
             raise AssertionError(f"component with {len(shells)} outer contours")
         polygons.append(Polygon(shells[0], holes))
-    keys = [polylabel(p, tolerance=POLYLABEL_TOLERANCE) for p in polygons]
-    order = sorted(range(len(polygons)), key=lambda i: (keys[i].x, keys[i].y))
-    return [polygons[i] for i in order]
+    return polygons
+
+
+@functools.lru_cache(maxsize=POLYLABEL_CACHE_SIZE)
+def polylabel_point(polygon: Polygon) -> tuple[float, float]:
+    """Return the polygon's polylabel point: the interior point farthest from its boundary.
+
+    Computed to ``POLYLABEL_TOLERANCE``. It orders regions (§4.3) and tells which piece lies
+    on each side of a cut face (Phase 4). It is the slowest step of the cutting on thin
+    regions (a 2 mm ring takes about 30 ms), and the same region is sorted and then matched
+    to its pieces, so results are cached; shapely geometries hash and compare by value.
+
+    Args:
+        polygon: A polygon with a positive area, (u, v) in mm.
+
+    Returns:
+        (u, v), mm.
+    """
+    point = polylabel(polygon, tolerance=POLYLABEL_TOLERANCE)
+    return (float(point.x), float(point.y))
+
+
+def sorted_by_polylabel(polygons: Iterable[Polygon]) -> list[Polygon]:
+    """Sort polygons by their polylabel point, u then v: the region order of §4.3.
+
+    Args:
+        polygons: Polygons with a positive area, (u, v) in mm.
+
+    Returns:
+        The polygons, sorted.
+    """
+    keyed = [(polylabel_point(polygon), polygon) for polygon in polygons]
+    return [polygon for _, polygon in sorted(keyed, key=lambda item: item[0])]
+
+
+def section(body: Manifold, axis: Axis, offset: float) -> MultiPolygon:
+    """Return the section of a solid by a plane, in the plane's (u, v) frame.
+
+    A single slice: when a model face lies exactly on the plane, the section is one-sided
+    (ADR-0002), so probe off the plane (``cut_region`` for contacts).
+
+    Args:
+        body: Solid, mm, cutting frame.
+        axis: Plane axis.
+        offset: Plane offset along ``axis``, mm.
+
+    Returns:
+        The section's polygons (with holes), in ``decompose()`` order; empty when the plane
+        misses the body.
+    """
+    return MultiPolygon(_polygons(_to_local(body, axis).slice(offset)))
+
+
+def cut_region(body: Manifold, plane: Plane, eps: float) -> list[Polygon]:
+    """Return the contact region between the two sides of a cut plane.
+
+    The region is the intersection of the slices at ``plane.offset - eps`` and
+    ``plane.offset + eps``. A single slice is one-sided when a model face lies exactly on the
+    plane: a plate on a column sliced at the step gives the plate's 1600 mm² instead of the
+    100 mm² contact (ADR-0002).
+
+    Args:
+        body: Normalized input body, cutting frame, mm (never a piece: both pieces of a face
+            must see the same region).
+        plane: The cut plane.
+        eps: Half-thickness of the probe, mm (``advanced.section_epsilon``).
+
+    Returns:
+        Connected polygons with holes, in plane-local (u, v) coordinates
+        (docs/ARCHITECTURE.md, "Frames"), sorted by their polylabel point.
+    """
+    local = _to_local(body, plane.axis)
+    contact = local.slice(plane.offset - eps) ^ local.slice(plane.offset + eps)
+    return crosssection_to_polygons(contact)
+
+
+def clip_to_cells(
+    polygons: Iterable[Polygon], axis: Axis, cell_a: Box, cell_b: Box
+) -> list[Polygon]:
+    """Clip regions to the rectangle two cells adjacent across a plane share in that plane.
+
+    Args:
+        polygons: Regions of the plane, (u, v) in mm (``cut_region``).
+        axis: Plane axis; the cells are adjacent along it.
+        cell_a: One cell's box, cutting frame (``grid.cell_bounds``).
+        cell_b: The other cell's box.
+
+    Returns:
+        The clipped regions split into connected polygons, without parts of
+        ``AREA_TOLERANCE`` or less (float slivers, or a region that only touches the
+        rectangle), sorted by their polylabel point.
+    """
+    u_axis, v_axis, _ = _LOCAL_AXES[axis]
+    u0, v0 = max(cell_a[0][u_axis], cell_b[0][u_axis]), max(cell_a[0][v_axis], cell_b[0][v_axis])
+    u1, v1 = min(cell_a[1][u_axis], cell_b[1][u_axis]), min(cell_a[1][v_axis], cell_b[1][v_axis])
+    if u1 <= u0 or v1 <= v0:
+        return []
+    rectangle = box(u0, v0, u1, v1)
+    parts = [
+        part
+        for polygon in polygons
+        for part in _polygon_parts(polygon.intersection(rectangle))
+        if part.area > AREA_TOLERANCE
+    ]
+    return sorted_by_polylabel(parts)
+
+
+def _polygon_parts(shape: BaseGeometry) -> list[Polygon]:
+    """The polygons in a shapely result, dropping its points and lines."""
+    if isinstance(shape, Polygon):
+        return [] if shape.is_empty else [shape]
+    return [part for item in getattr(shape, "geoms", ()) for part in _polygon_parts(item)]
+
+
+def shadow(body: Manifold, axis: Axis) -> CrossSection:
+    """Return a solid's projection along an axis (its shadow), in that axis' (u, v) frame.
+
+    Args:
+        body: Solid, mm, cutting frame.
+        axis: The projection axis.
+
+    Returns:
+        The shadow, (u, v) in mm (``Manifold.project`` after rotating the axis to local z).
+    """
+    return _to_local(body, axis).project()
+
+
+def overlap_area(first: CrossSection, second: CrossSection) -> float:
+    """Return the area two cross-sections have in common, mm².
+
+    Args:
+        first: Cross-section, (u, v) in mm.
+        second: Cross-section in the same frame.
+
+    Returns:
+        The area of their intersection.
+    """
+    return float((first ^ second).area())
+
+
+def grow(section: CrossSection, delta: float) -> CrossSection:
+    """Return a cross-section grown outwards by ``delta`` mm, with round corners.
+
+    Args:
+        section: Cross-section, (u, v) in mm.
+        delta: Growth, mm (> 0).
+
+    Returns:
+        The grown cross-section.
+    """
+    return section.offset(delta, JoinType.Round)
+
+
+def prism(footprint: CrossSection, axis: Axis, low: float, high: float) -> Manifold:
+    """Extrude a plane-local footprint along the plane's normal, from ``low`` to ``high``.
+
+    Args:
+        footprint: Cross-section in the (u, v) frame of ``axis``, mm.
+        axis: The extrusion axis (the plane's normal).
+        low: Start along ``axis``, mm, cutting frame.
+        high: End along ``axis``, mm; greater than ``low``.
+
+    Returns:
+        The prism, cutting frame.
+
+    Raises:
+        ValueError: If ``high <= low``.
+    """
+    if high <= low:
+        raise ValueError(f"invalid prism: low={low}, high={high}")
+    local = Manifold.extrude(footprint, high - low).translate((0.0, 0.0, low))
+    return local.transform(local_to_world(axis))
+
+
+def box_solid(low: Point3, high: Point3) -> Manifold:
+    """Return the axis-aligned box from ``low`` to ``high``, mm, cutting frame."""
+    size = (high[0] - low[0], high[1] - low[1], high[2] - low[2])
+    return Manifold.cube(size).translate(low)
+
+
+def rectangle(axis: Axis, low: Point3, high: Point3) -> CrossSection:
+    """Return a box's cross-section across ``axis``, in that axis' (u, v) frame.
+
+    Args:
+        axis: The plane axis.
+        low: The box's low corner, mm, cutting frame.
+        high: Its high corner.
+
+    Returns:
+        The rectangle spanned by the box along u and v.
+    """
+    u_axis, v_axis, _ = _LOCAL_AXES[axis]
+    size = (high[u_axis] - low[u_axis], high[v_axis] - low[v_axis])
+    return CrossSection.square(size).translate((low[u_axis], low[v_axis]))
+
+
+def split_at(body: Manifold, axis: Axis, offset: float) -> tuple[Manifold, Manifold]:
+    """Split a solid by a plane into the part below it and the part above it.
+
+    Each part is the body minus a box covering the other side, reaching ``CUTTER_PAD`` past
+    the body's bounding box. ``split_by_plane``, ``trim_by_plane`` and an intersection with a
+    box all leave a zero-thickness, two-sided flap where a model face lies exactly on the
+    plane: a column on a plinth cut at the step keeps the plinth's 40 × 40 top as a sheet. The
+    difference doesn't (docs/LIBRARY_NOTES.md, ``manifold.coplanar_cuts``).
+
+    Args:
+        body: Solid, mm, cutting frame.
+        axis: Plane axis.
+        offset: Plane offset along ``axis``, mm.
+
+    Returns:
+        (the part where coordinate ``axis`` < ``offset``, the part where it is greater); a part
+        is empty when nothing lies on its side.
+    """
+    if body.is_empty():
+        return body, body
+    box = body.bounding_box()
+    if offset <= box[axis]:
+        return Manifold(), body
+    if offset >= box[axis + 3]:
+        return body, Manifold()
+    low = [value - CUTTER_PAD for value in box[:3]]
+    high = [value + CUTTER_PAD for value in box[3:]]
+    upper_low, lower_high = list(low), list(high)
+    upper_low[axis] = offset
+    lower_high[axis] = offset
+    below = body - box_solid(_point(upper_low), _point(high))
+    above = body - box_solid(_point(low), _point(lower_high))
+    return below, above
+
+
+def clip(body: Manifold, region: Manifold) -> Manifold:
+    """Return the part of a solid inside a region, computed by difference.
+
+    ``body − (box − region)``, with the box ``2 · CUTTER_PAD`` past the body's bounding box:
+    an intersection would leave a flap where a model face lies on the region's surface (see
+    :func:`split_at`).
+
+    Args:
+        body: Solid, mm.
+        region: Solid in the same frame.
+
+    Returns:
+        The clipped solid.
+    """
+    if body.is_empty():
+        return body
+    box = body.bounding_box()
+    low = _point([value - 2 * CUTTER_PAD for value in box[:3]])
+    high = _point([value + 2 * CUTTER_PAD for value in box[3:]])
+    return body - (box_solid(low, high) - region)
+
+
+def _point(values: Sequence[float]) -> Point3:
+    x, y, z = values
+    return (x, y, z)
+
+
+def lies_inside(solid: Manifold, container: Manifold) -> bool:
+    """Whether ``solid`` lies inside ``container``, up to ``VOID_RESIDUAL_FRACTION`` of its volume.
+
+    Args:
+        solid: A solid (positive volume), mm.
+        container: A solid in the same frame.
+
+    Returns:
+        True if ``(solid − container).volume() ≤ VOID_RESIDUAL_FRACTION · solid.volume()``.
+    """
+    return bool((solid - container).volume() <= VOID_RESIDUAL_FRACTION * solid.volume())
+
+
+def bodies(solid: Manifold) -> list[Manifold]:
+    """Split a valid solid into its bodies: each outward shell with the voids it holds.
+
+    ``decompose()`` returns every closed shell on its own, a void's inside-out shell included
+    (docs/LIBRARY_NOTES.md); dropped, or kept as a body of its own, it would fill the void.
+    Each void goes to the smallest outward shell it lies inside and is subtracted from it.
+    A body loose inside a void is a body of its own.
+
+    Args:
+        solid: A valid manifold whose shells don't cross (a normalized body or a part of
+            one), mm, any frame.
+
+    Returns:
+        The bodies, positive volumes, in ``decompose()`` order of their outer shells.
+
+    Raises:
+        AssertionError: A void lies inside no outward shell (the solid isn't normalized; a
+            bug).
+    """
+    shells = solid.decompose()
+    outer = [shell for shell in shells if shell.volume() > 0]
+    voids = [reverse_winding(shell) for shell in shells if shell.volume() < 0]
+    if not voids:
+        return outer
+    boxes = [shell.bounding_box() for shell in outer]
+    volumes = [shell.volume() for shell in outer]
+    held: dict[int, list[Manifold]] = {}
+    for void in voids:
+        low, high = void.bounding_box()[:3], void.bounding_box()[3:]
+        containers = [
+            index
+            for index, shell in enumerate(outer)
+            if all(a >= b for a, b in zip(low, boxes[index][:3], strict=True))
+            and all(a <= b for a, b in zip(high, boxes[index][3:], strict=True))
+            and lies_inside(void, shell)
+        ]
+        if not containers:
+            raise AssertionError(f"a void of {void.volume():.6g} mm^3 lies inside no body")
+        owner = min(containers, key=lambda index: (volumes[index], index))
+        held.setdefault(owner, []).append(void)
+    return [shell - union_all(held[i]) if i in held else shell for i, shell in enumerate(outer)]
+
+
+def _to_local(body: Manifold, axis: Axis) -> Manifold:
+    """``body`` in the plane-local frame of ``axis``: the plane at offset o is local z = o."""
+    return body.transform(world_to_local(axis))
 
 
 def ray_depth(

@@ -25,7 +25,7 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import trimesh
-from manifold3d import CrossSection, Error, FillRule, Manifold, Mesh, OpType
+from manifold3d import CrossSection, Error, FillRule, JoinType, Manifold, Mesh, Mesh64, OpType
 from matplotlib.font_manager import FontProperties
 from matplotlib.textpath import TextPath
 from shapely.geometry import Point, Polygon
@@ -241,6 +241,84 @@ def manifold_coplanar_booleans() -> None:
     union = cube() + cube().translate((10.0, 0.0, 0.0))
     expect(len(union.decompose()) == 1, "coplanar union should give one body")
     expect(close(union.volume(), 2000.0), "coplanar union should have the exact volume")
+
+
+@check("manifold.coplanar_cuts")
+def manifold_coplanar_cuts() -> None:
+    # A 10 x 10 x 20 column on a 40 x 40 x 10 plinth, cut at the step z = 10. The column alone
+    # has 1000 mm^2 of surface.
+    plinth = Manifold.cube((40.0, 40.0, 10.0)) + Manifold.cube((10.0, 10.0, 20.0)).translate(
+        (15.0, 15.0, 10.0)
+    )
+    above_box = Manifold.cube((100.0, 100.0, 50.0)).translate((-30.0, -30.0, 10.0))
+    below_box = Manifold.cube((100.0, 100.0, 50.0)).translate((-30.0, -30.0, -40.0))
+    # Intersections keep the plinth's top as a zero-thickness two-sided sheet on the column:
+    # same volume, NoError, one body, but 4000 mm^2 and a 40 x 40 bounding box.
+    for name, column in (
+        ("split_by_plane", plinth.split_by_plane((0.0, 0.0, 1.0), 10.0)[0]),
+        ("trim_by_plane", plinth.trim_by_plane((0.0, 0.0, 1.0), 10.0)),
+        ("intersection", plinth ^ above_box),
+    ):
+        expect(close(column.volume(), 2000.0), f"{name}: volume {column.volume()}")
+        expect(close(column.surface_area(), 4000.0), f"{name}: area {column.surface_area()}")
+    # A difference with the other side's box is clean, on both sides of the step.
+    column = plinth - below_box
+    expect(close(column.surface_area(), 1000.0), f"difference: area {column.surface_area()}")
+    expect(close(column.bounding_box()[0], 15.0), "difference: no sheet in the bounding box")
+    expect(close((plinth - above_box).surface_area(), 4800.0), "difference: clean plinth")
+
+
+@check("manifold.union_of_split_halves")
+def manifold_union_of_split_halves() -> None:
+    # The split halves of a cube cut between its vertices glue back cleanly...
+    first, second = cube().split_by_plane((1.0, 0.0, 0.0), 5.0)
+    expect(close((first + second).surface_area(), 600.0), "cube halves should glue cleanly")
+    # ...but not when the plane passes through vertices: a face stays inside (700, not 600
+    # mm², still NoError and one body). The small-piece merge therefore never glues.
+    ringed = cube(5.0).scale((1.0, 2.0, 2.0)) + cube(5.0).scale((1.0, 2.0, 2.0)).translate(
+        (5, 0, 0)
+    )
+    expect(close(ringed.surface_area(), 600.0), "two boxes should union into one clean box")
+    first, second = ringed.split_by_plane((1.0, 0.0, 0.0), 5.0)
+    glued = first + second
+    expect(len(glued.decompose()) == 1 and close(glued.volume(), 1000.0), "one body, exact volume")
+    expect(close(glued.surface_area(), 700.0), f"glued area {glued.surface_area()}, expected 700")
+    # Cutting the whole in one go instead is clean: the box x < 5 joined to a prism over the
+    # other half's shadow, kept by difference, as cutting._cut_merged does (manifold.coplanar_cuts).
+    w2l = np.zeros((3, 4))
+    w2l[0, 1] = w2l[1, 2] = w2l[2, 0] = 1.0
+    l2w = np.zeros((3, 4))
+    l2w[:, :3] = w2l[:, :3].T
+    footprint = first.transform(w2l).project().offset(0.05, JoinType.Round)
+    prism = Manifold.extrude(footprint, 6.05).translate((0.0, 0.0, 4.95)).transform(l2w)
+    region = Manifold.cube((6.0, 12.0, 12.0)).translate((-1.0, -1.0, -1.0)) + prism
+    outside = Manifold.cube((14.0, 14.0, 14.0)).translate((-2.0, -2.0, -2.0)) - region
+    carved = ringed - outside
+    expect(close(carved.surface_area(), 600.0), f"carved area {carved.surface_area()}")
+
+
+@check("manifold.decompose_void_shells")
+def manifold_decompose_void_shells() -> None:
+    hollow = Manifold.cube((300.0, 100.0, 100.0)) - Manifold.sphere(20.0, 32).translate(
+        (50, 50, 50)
+    )
+    cell = hollow.split_by_plane((1.0, 0.0, 0.0), 150.0)[1]  # x < 150 holds the whole void
+    shells = cell.decompose()
+    volumes = sorted(shell.volume() for shell in shells)
+    expect(len(shells) == 2 and volumes[0] < 0 < volumes[1], f"shell volumes {volumes}")
+    void = next(shell for shell in shells if shell.volume() < 0)
+    composed = Manifold.compose([s for s in shells if s.volume() > 0] + [void])
+    expect(close(composed.volume(), 1_500_000.0), "compose drops an inside-out shell")
+    mesh = void.to_mesh64()
+    solid = Manifold(
+        Mesh64(
+            vert_properties=np.array(mesh.vert_properties[:, :3], dtype=np.float64),
+            tri_verts=np.array(mesh.tri_verts[:, ::-1], dtype=np.uint64),
+        )
+    )
+    expect(close(solid.volume(), -void.volume()), "Mesh64 reversal should flip the volume")
+    rebuilt = next(shell for shell in shells if shell.volume() > 0) - solid
+    expect(close(rebuilt.volume(), cell.volume()), "outer shell minus the void is the cell")
 
 
 @check("manifold.slice_at_step")

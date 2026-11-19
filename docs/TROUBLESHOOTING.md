@@ -104,10 +104,26 @@ TODO (Phase 5)
 TODO (Phase 8)
 
 ### W004 — Small piece left on its own (warning)
-TODO (Phase 4)
+A piece smaller than `small_piece_volume` (500 mm³ by default) couldn't be merged into a
+neighbour, so it is printed on its own. The message gives the reason:
+- `it touches 2 pieces`: it sits between several pieces, and merging it into one of them
+  would make the assembly ambiguous;
+- `merged with X0-Y0-Z0 it would be 105 mm along X, over U = 102 mm`: the merged piece
+  wouldn't fit the usable volume;
+- `X1-Y0-Z0-a of its cell lies in its footprint along X`: another piece is in the way of the
+  straight move that would bring the merged piece into place;
+- `it already absorbed …`: it took in a small piece itself and now spans two cells;
+- `it couldn't be cut cleanly from the model`: something else would have been cut with it.
+
+Fix: usually nothing. The piece prints on its own; glue it in place when assembling (it has
+connectors only if its face has room for one). Plane nudging (Phase 6) will move planes away
+from slivers. [Details](ALGORITHMS.md#small-piece-merge).
 
 ### W005 — Small piece merged (info)
-TODO (Phase 4)
+A piece smaller than `small_piece_volume` crossed a cut plane by a little, and was merged into
+the piece it touches, which keeps its ID and lists the small piece in `merged_from`. That
+piece now sticks out of its cell slightly but still fits the usable volume. Nothing to do.
+`small_piece_volume = 0` in `[advanced]` turns merging off.
 
 ### W006 — Suspicious scale (warning)
 The model's largest dimension is under 1 mm or over 5000 mm after `--scale`. STL files have no
@@ -121,7 +137,10 @@ message lists each step that changed something, e.g. `triangles added to close h
 Nothing to do, but check the parts in your slicer: a hole closed by repair is flat.
 
 ### W008 — Piece without cut face (info)
-TODO (Phase 4)
+A piece touches no other piece across a cut plane: it is a separate body of the model (for
+example a loose part, or a small piece that absorbed the rest of a tiny body). It gets no
+connector and no label. Nothing to do; place it by hand when assembling. Not reported when
+the model fits in one cell (W012).
 
 ### W009 — Single connector on a face (info)
 TODO (Phase 5)

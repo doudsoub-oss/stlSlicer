@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import trimesh
 from hypothesis import settings
-from manifold3d import Manifold, OpType
+from manifold3d import CrossSection, Manifold, OpType
 
 # Hypothesis is derandomized in CI, so a run is reproducible (PLAN.md §4.4, rule 1); local runs
 # stay random and explore more. GitHub Actions sets CI=true.
@@ -184,6 +184,83 @@ def dense_sphere() -> Manifold:
     sphere r = 50 would move the surface by about 0.06 mm.
     """
     return Manifold.sphere(20.0, 256)
+
+
+TORUS_MAJOR_RADIUS = 60.0
+TORUS_MINOR_RADIUS = 15.0
+
+
+def torus() -> Manifold:
+    """Torus around Z, centred on the origin: tube r = 15 at R = 60 (150 × 150 × 30 mm).
+
+    ``revolve`` puts one of its 64 steps at every quarter turn, so the planes x = 0 and
+    y = 0 cut the tube through polygon vertices.
+    """
+    circle = CrossSection.circle(TORUS_MINOR_RADIUS, 32).translate((TORUS_MAJOR_RADIUS, 0.0))
+    return Manifold.revolve(circle, 64)
+
+
+def u_shape() -> Manifold:
+    """A U extruded 20 mm along Y: a 60 × 10 base (Z 0 to 10) and two 10 mm arms up to Z = 50.
+
+    Its profile (in the XZ plane) has an area of 600 + 2 × 400 = 1400 mm².
+    """
+    return Manifold.batch_boolean(
+        [
+            Manifold.cube((60.0, 20.0, 10.0)),
+            Manifold.cube((10.0, 20.0, 50.0)),
+            Manifold.cube((10.0, 20.0, 50.0)).translate((50.0, 0.0, 0.0)),
+        ],
+        OpType.Add,
+    )
+
+
+def plinth_step() -> Manifold:
+    """A 10 × 10 × 20 box standing on a 40 × 40 × 10 plinth: a step at z = 10, 100 mm² contact."""
+    return Manifold.cube((40.0, 40.0, 10.0)) + Manifold.cube((10.0, 10.0, 20.0)).translate(
+        (15.0, 15.0, 10.0)
+    )
+
+
+def overhang_step() -> Manifold:
+    """A 40 × 40 × 10 plate on a 10 × 10 × 10 column: the other step direction, at z = 10."""
+    return Manifold.cube((10.0, 10.0, 10.0)).translate((15.0, 15.0, 0.0)) + Manifold.cube(
+        (40.0, 40.0, 10.0)
+    ).translate((0.0, 0.0, 10.0))
+
+
+KNOB_PLANES: tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]] = (
+    (100.0,),
+    (100.0,),
+    (),
+)
+"""Plane offsets per axis that the knob tests cut ``knob`` with: x = 100 crosses the knob,
+y = 100 halves the box (so the piece that absorbs the knob tip keeps a cut face)."""
+
+
+def knob(blocked: bool = False, rounded: bool = False) -> Manifold:
+    """A 95 × 200 × 100 box with a small knob on its +X face, centred at y = z = 50.
+
+    The knob is 6 × 6 mm from x = 90 to 105, so x = 100 leaves a 180 mm³ tip on its own
+    (``KNOB_PLANES``). ``rounded`` makes it a ball r = 6 centred at x = 100 instead: the plane
+    then passes through the ball's equator vertices, and the tip is 450 mm³. ``blocked`` adds a
+    10 × 20 × 20 block at x = 110 to 120 on the knob's axis, in the tip's cell, overlapping its
+    footprint along X.
+    """
+    box = Manifold.cube((95.0, 200.0, 100.0))
+    if rounded:
+        body = box + Manifold.sphere(6.0, SPHERE_SEGMENTS).translate((100.0, 50.0, 50.0))
+    else:
+        body = box + Manifold.cube((15.0, 6.0, 6.0)).translate((90.0, 47.0, 47.0))
+    if blocked:
+        body = Manifold.compose([body, Manifold.cube((10.0, 20.0, 20.0)).translate((110, 40, 40))])
+    return body
+
+
+def box_with_bubble() -> Manifold:
+    """A 300 × 100 × 100 box with a sphere r = 20 void centred at x = 50 (away from x = 150)."""
+    bubble = Manifold.sphere(20.0, 32).translate((50.0, 50.0, 50.0))
+    return Manifold.cube((300.0, 100.0, 100.0)) - bubble
 
 
 # --- Meshes that need normalization or repair ---------------------------------------------------

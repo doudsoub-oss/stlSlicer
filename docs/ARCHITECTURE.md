@@ -20,20 +20,20 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 
 | Module | Responsibility | May import | Status |
 |---|---|---|---|
-| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`; the others come with their phase) |
+| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`, `Piece`, `CutFace`; the others come with their phase) |
 | `errors` | Exit codes, exception types, diagnostic registry | `models` | ✓ |
 | `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` | ✓ |
-| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections; rays; cylinders | `config`, `models` | ✓ (sections in Phase 4) |
+| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders | `config`, `models` | ✓ |
 | `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
 | `connectors` | Connector placement | `geometry` | TODO (Phase 5) |
 | `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` | ✓ (nudging in Phase 6) |
-| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry` | TODO (Phase 4) |
+| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
 | `labels` | Text outlines and layout on a face | `geometry` | TODO (Phase 8) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` | TODO (Phase 7) |
 | `calibrate` | Calibration kit | `tools`, `labels` | TODO (Phase 7) |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup; writing in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the grid until the next stages exist) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the cutting until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -103,12 +103,43 @@ Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
 | `Orientation` | `models` | Phase 3 | The chosen rotation's name and the 4×4 input → cutting transform (in `models`, not `grid`, because `assembly` writes it to `assembly.json` in Phase 9) |
 | `Plane` | `models` | Phase 3 | A cut plane: axis, index among its axis' planes, offset (mm, cutting frame) |
 | `Grid` | `models` | Phase 3 | U, cell counts and planes per axis, and the model's extent in the cutting frame |
+| `Piece` | `models` | Phase 4 | ID, cell, body (cutting frame), face IDs, and the IDs of the small pieces merged into it; `label` comes in Phase 8 |
+| `CutFace` | `models` | Phase 4 | ID, plane, neg and pos piece IDs, and the contact region (shapely polygon in plane-local (u, v)) |
 
 `grid.Rotation` (a candidate of auto-orient: name and 3×3 integer matrix) stays in `grid`:
 only `grid` uses it.
 
-Planned: `Piece`, `CutFace` (Phase 4), `Connector` (Phase 5), `Label` (Phase 8),
-`AssemblyStep` (Phase 9).
+`cutting.Cut` (pieces, faces, diagnostics: what the cutting stage returns) stays in `cutting`:
+only the CLI reads it. Planned: `Connector` (Phase 5), `Label` (Phase 8), `AssemblyStep`
+(Phase 9).
+
+## Cutting
+
+```
+body (cutting frame) + Grid
+  │  cutting.split_cells     geometry.split_at (by difference): X planes, then Y, then Z
+  │                          geometry.bodies per cell (outer shell − its voids), drop < 1e-6 mm³
+  │                          order (min z, min y, min x, −volume) → IDs X1-Y0-Z2, X1-Y0-Z2-a, …
+  ▼
+cutting.cut_faces            per plane: geometry.cut_region(body) = slice(o−ε) ∩ slice(o+ε)
+  │                          per cell pair: geometry.clip_to_cells → polygons
+  │                          polylabel point in the sections at o ∓ 0.05 → neg / pos piece
+  ▼
+cutting.merge_small_pieces   W004 / W005; a merged piece is cut again from the body
+  ▼
+cutting.check_pieces         I1, I3 (AssertionError = exit 4); W008 for faceless pieces
+```
+
+- Regions always come from the normalized body, never from the pieces (ADR-0002), so both
+  pieces of a face see the same region.
+- Solids are only ever cut by difference (`geometry.split_at`, `geometry.clip`): an
+  intersection leaves a zero-thickness flap where a model face lies on the cut
+  (docs/LIBRARY_NOTES.md). A merged piece is cut from the body, never glued (ADR-0012).
+- Every collection comes out in a documented order: pieces in cell order then suffix, faces
+  by plane, neg cell, then polylabel point (docs/ALGORITHMS.md, "Sections and cut faces").
+- `cutting` imports `grid` for `cell_indices`, `cell_bounds` and `fits` (PLAN.md Appendix E,
+  r7). The CLI logs `cutting: 8 pieces, 12 cut faces` and the dry run lists every piece
+  (volume, `merged_from`) and face (plane, area).
 
 ## Frames
 
@@ -160,7 +191,17 @@ Plane-local axes:
 
 ## Invariants
 
-TODO (Phase 4): I1–I7 (PLAN.md §5.3), with where each is asserted and tested.
+PLAN.md §5.3. "Asserted" means checked at run time (a failure is a bug: exit 4).
+
+| ID | Invariant | Asserted | Tested |
+|---|---|---|---|
+| I1 | Every piece body is `NoError` with a positive volume | `repair.prepare` (the body), `cutting.check_pieces` (the pieces) | `tests/integration/test_repair.py`, `tests/integration/test_cutting.py` (hypothesis property) |
+| I2 | Every final piece fits U | `grid.even_grid` (cells, via `grid.fits`); `cutting.merge_small_pieces` refuses a merge that wouldn't fit | `tests/unit/test_grid.py`, `test_cutting.py`; final pieces with pegs: TODO (Phase 7) |
+| I3 | Before tools, the piece volumes add up to the reference volume within 0.1 % | `cutting.check_pieces` | `test_cutting.py` (hypothesis property, voids, merges) |
+| I4 | Every cut face has one piece on each side, and its region lies inside both sections | by construction (`cutting.cut_faces`) | `test_cutting.py` (`assert_regions_lie_in_both_pieces`) |
+| I5 | No two holes of a piece are closer than `min_wall` | TODO (Phase 5) | TODO (Phase 5) |
+| I6 | Every connector's axis point lies in its face's safe region | TODO (Phase 5) | TODO (Phase 5) |
+| I7 | Every assembly step joins two sub-assemblies along faces perpendicular to its axis | TODO (Phase 9); the merge's footprint guard keeps it possible (docs/ALGORITHMS.md) | TODO (Phase 9) |
 
 ## Diagnostics flow
 
