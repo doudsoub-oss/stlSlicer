@@ -154,3 +154,62 @@ def test_union_all_merges_overlapping_solids() -> None:
     assert union.volume() == pytest.approx(2500.0)
     assert len(union.decompose()) == 2
     assert geometry.union_all([]).is_empty()
+
+
+# --- holes (Phase 5) --------------------------------------------------------------------------
+
+
+def polygon_area_from_flats(segments: int, apothem: float) -> float:
+    """Area of a regular polygon whose flats sit at ``apothem``."""
+    return segments * apothem**2 * math.tan(math.pi / segments)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("side", [-1, 1])
+def test_hole_runs_from_the_plane_into_its_side_along_the_axis(axis: int, side: int) -> None:
+    hole = geometry.hole_solid(axis, 50.0, (20.0, 30.0), side, 10.5, 2.7, 0.0, 64)  # type: ignore[arg-type]
+    assert hole.status() == Error.NoError
+    low, high = hole.bounding_box()[:3], hole.bounding_box()[3:]
+    assert (low[axis], high[axis]) == pytest.approx((50.0, 60.5) if side > 0 else (39.5, 50.0))
+    u_axis, v_axis = [(1, 2), (2, 0), (0, 1)][axis]
+    assert (low[u_axis] + high[u_axis]) / 2 == pytest.approx(20.0)
+    assert (low[v_axis] + high[v_axis]) / 2 == pytest.approx(30.0)
+    # Radius-compensated: the polygon's flats sit at r_h, as for the cylinder.
+    assert hole.volume() == pytest.approx(polygon_area_from_flats(64, 2.7) * 10.5)
+
+
+@pytest.mark.parametrize("side", [-1, 1])
+def test_hole_mouth_has_a_45_degree_chamfer(side: int) -> None:
+    plain = geometry.hole_solid(2, 0.0, (0.0, 0.0), side, 10.5, 2.7, 0.0, 64)
+    chamfered = geometry.hole_solid(2, 0.0, (0.0, 0.0), side, 10.5, 2.7, 0.4, 64)
+    assert chamfered.status() == Error.NoError
+    # At the plane, the mouth is r_h + ch_h; at depth ch_h, it is back to r_h.
+    at_mouth = chamfered.slice(side * 1e-6).area()
+    assert at_mouth == pytest.approx(polygon_area_from_flats(64, 3.1), rel=1e-4)
+    assert chamfered.slice(side * 0.5).area() == pytest.approx(plain.slice(side * 0.5).area())
+    cone = math.pi * 0.4 / 3 * (3.1**2 + 3.1 * 2.7 + 2.7**2) - math.pi * 2.7**2 * 0.4
+    assert chamfered.volume() - plain.volume() == pytest.approx(cone, rel=2e-3)
+
+
+def test_hole_chamfer_is_cut_short_on_a_shallow_hole() -> None:
+    hole = geometry.hole_solid(2, 0.0, (0.0, 0.0), 1, 0.3, 2.7, 0.4, 64)
+    assert hole.status() == Error.NoError
+    assert hole.bounding_box()[5] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize(
+    ("side", "depth", "radius", "chamfer"),
+    [(0, 1.0, 2.7, 0.4), (1, 0.0, 2.7, 0.4), (1, 1.0, 0.0, 0.4), (1, 1.0, 2.7, -0.1)],
+)
+def test_hole_rejects_invalid_arguments(
+    side: int, depth: float, radius: float, chamfer: float
+) -> None:
+    with pytest.raises(ValueError, match="invalid hole"):
+        geometry.hole_solid(0, 0.0, (0.0, 0.0), side, depth, radius, chamfer, 64)
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_local_point_is_the_inverse_of_the_plane_local_frame(axis: int) -> None:
+    point = geometry.local_point(axis, 1.0, 2.0, 3.0)  # type: ignore[arg-type]
+    local = geometry.world_to_local(axis)[:, :3] @ np.array(point)  # type: ignore[arg-type]
+    assert local.tolist() == [1.0, 2.0, 3.0]

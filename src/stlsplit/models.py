@@ -2,8 +2,8 @@
 
 Dataclasses only, no behaviour. Each dataclass of §5.2 is added by the phase that first uses
 it: Phase 1 adds ``Diagnostic``; Phase 3 adds ``Orientation``, ``Plane`` and ``Grid``; Phase 4
-adds ``Piece`` and ``CutFace``; ``Connector`` comes in Phase 5, ``Label`` (and
-``Piece.label``) in Phase 8, ``AssemblyStep`` in Phase 9.
+adds ``Piece`` and ``CutFace``; Phase 5 adds ``Connector``. ``Label`` (and ``Piece.label``)
+come in Phase 8, ``AssemblyStep`` in Phase 9.
 """
 
 from dataclasses import dataclass
@@ -17,6 +17,10 @@ Axis = Literal[0, 1, 2]
 
 Severity = Literal["info", "warning", "partial"]
 """Severity of a diagnostic; ``partial`` makes the run exit 3 (PLAN.md §4.5)."""
+
+ConnectorKind = Literal["dowel", "peg"]
+"""A placed connector: a loose dowel in two holes, or a peg on the neg piece in a hole of the
+pos piece (ADR-0005)."""
 
 
 @dataclass(frozen=True)
@@ -134,3 +138,32 @@ class CutFace:
     piece_neg: str
     piece_pos: str
     region: Polygon
+
+
+@dataclass(frozen=True)
+class Connector:
+    """One connector on a cut face (PLAN.md Phase 5): its axis position and its pin.
+
+    Built by ``connectors.place``. The holes run along the plane's normal from the face, into
+    the neg piece (local z < offset) and the pos piece (z > offset).
+
+    Attributes:
+        id: ``{face}/c{n}``, n from 1 in acceptance order (PLAN.md §4.3).
+        face_id: The cut face.
+        kind: ``dowel`` (holes on both sides) or ``peg`` (the peg stands on the neg piece).
+        position_uv: The axis point, plane-local (u, v), mm; inside the face's safe region (I6).
+        diameter: d, mm.
+        pin_length: L, one of the standard lengths, mm (§6.2); for a peg, twice its
+            protrusion.
+        hole_depth_neg: h(L) in the neg piece, mm; 0 on a peg's side.
+        hole_depth_pos: h(L) in the pos piece, mm.
+    """
+
+    id: str
+    face_id: str
+    kind: ConnectorKind
+    position_uv: tuple[float, float]
+    diameter: float
+    pin_length: float
+    hole_depth_neg: float
+    hole_depth_pos: float

@@ -43,6 +43,24 @@ to their pieces, so each is asked for twice)."""
 RAY_START_OFFSET = 0.01
 """ε_ray: rays start this far inside a piece, mm, so the face they leave isn't hit (§6.1)."""
 
+RAY_CIRCLE_COUNT = 8
+"""Depth rays on the circle of radius r_h + w around a connector's axis, besides the axis one
+(Phase 5, task 5.1)."""
+
+RAY_LENGTH_MARGIN = 1.0
+"""Depth rays are h(L_max) + w + this long, mm (Phase 5, task 5.1)."""
+
+GAP_SEARCH_MARGIN = 1.0
+"""``min_gap`` between two holes searches up to w + this, mm (Phase 5, task 5.4)."""
+
+MAX_CANDIDATE_TRIALS = 256
+"""Candidates of one face that go through the 3D checks at most (PLAN.md Appendix E, r8).
+
+A face whose every candidate fails would otherwise run the containment boolean for each of
+them, up to 25 000 on a 210 mm face at 7 ms each on a dense mesh. After this many, the face
+gets W001.
+"""
+
 CANDIDATE_GRID_DIVISOR = 4
 """g = d / this: step of the connector candidate grid (§6.1)."""
 
@@ -53,10 +71,12 @@ CALIBRATION_MIN_WALL = 3.0
 """w_cal = max(w, this), mm: the wall used in the calibration kit (§6.3)."""
 
 LENGTH_TOLERANCE = 1e-9
-"""Slack when comparing a pin length to L_min, mm.
+"""Slack when comparing lengths that should be equal, mm.
 
 Without it, float rounding in L_max − k·Δ can drop a standard length equal to L_min (for
-example 16 − 64 × 0.1 < 3.2 × 3 in floats).
+example 16 − 64 × 0.1 < 3.2 × 3 in floats). It is also the slack when a hole depth h(L) is
+compared to the available depth, and when the gap between two holes is compared to w:
+``min_gap`` gives 1.999999999999993 for two holes exactly 2 mm apart (docs/LIBRARY_NOTES.md).
 """
 
 OUTPUT_DECIMALS = 6
@@ -110,7 +130,9 @@ SCALE_WARNING_MAX = 5000.0
 VOID_RESIDUAL_FRACTION = 1e-6
 """Shell normalization (Phase 2, ADR-0007): an inside-out shell F is a void when
 ``(F − union of the solids).volume() ≤ this · F.volume()``, i.e. F lies inside the solids.
-The same test decides whether a solid lies inside a void."""
+The same test (``geometry.lies_inside``) decides whether a solid lies inside a void, and
+whether a hole with its wall lies inside its piece (Phase 5, task 5.3: 1e-6 of the cylinder's
+volume)."""
 SHELL_OVERLAP_FRACTION = 1e-6
 """W010 when the union of the solids is smaller than the sum of their volumes by more than
 this fraction (Phase 2): boolean round-off stays far below it, a real overlap far above."""
@@ -447,6 +469,17 @@ def validate(cfg: Config) -> None:
         f"must be >= L_min = pin_min_length_factor x diameter = {_show(l_min)}",
         c.length,
     )
+    # Pins are printed lying down, so a full pin must fit the bed plate; this also bounds the
+    # number of standard lengths (PLAN.md Appendix E, r8). The bed, not U: the margin has its
+    # own rule, and a margin near half the bed stays valid.
+    plate = max(p.bed[:2])
+    _check(
+        c.length <= plate,
+        "connectors.length",
+        f"must be <= the longer side of the bed plate, max(bed X, bed Y) ({_show(plate)}): "
+        "pins are printed lying down",
+        c.length,
+    )
     _check(lab.depth > 0, "labels.depth", "must be > 0", lab.depth)
     _check(
         lab.depth < c.min_wall,
@@ -605,6 +638,9 @@ class Derived:
         area_per_connector: A = (``connector_area_factor`` · d)², mm².
         island_area: ``ISLAND_AREA_FACTOR`` · π · (d/2)², mm².
         label_keep_out: r_h + ch_h + w, mm: label keep-out radius around a connector.
+        probe_radius: r_h + w, mm: radius of the circle of depth rays and of the containment
+            cylinder around a connector's axis (Phase 5).
+        ray_length: h(L_max) + w + ``RAY_LENGTH_MARGIN``, mm: length of the depth rays.
         calibration: The calibration kit dimensions (§6.3).
     """
 
@@ -621,6 +657,8 @@ class Derived:
     area_per_connector: float
     island_area: float
     label_keep_out: float
+    probe_radius: float
+    ray_length: float
     calibration: CalibrationDims
 
 
@@ -691,6 +729,8 @@ def derived(cfg: Config) -> Derived:
         area_per_connector=(adv.connector_area_factor * c.diameter) ** 2,
         island_area=ISLAND_AREA_FACTOR * math.pi * (c.diameter / 2) ** 2,
         label_keep_out=hole_radius + adv.hole_chamfer + c.min_wall,
+        probe_radius=hole_radius + c.min_wall,
+        ray_length=hole_depth(cfg, c.length) + c.min_wall + RAY_LENGTH_MARGIN,
         calibration=calibration,
     )
 

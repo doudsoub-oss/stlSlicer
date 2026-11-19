@@ -10,7 +10,8 @@ After any dependency upgrade, run `python scripts/api_spike.py` and update this 
 Verified on 2026-11-18, Linux x86_64, CPython 3.13.18 (all 22 checks pass then; Phase 2 added
 five checks and the optional pymeshlab one, all 27 passing on 2026-11-19; Phase 4 added
 `manifold.coplanar_cuts`, `manifold.union_of_split_halves` and `manifold.decompose_void_shells`,
-all 31 passing on 2026-11-19). The `>=` minimums in
+all 31 passing on 2026-11-19; Phase 5 added `manifold.revolve_hole`, all 32 passing on
+2026-11-19). The `>=` minimums in
 `pyproject.toml` are these versions (numpy 2.5.5; the plan's own run on 2026-11-17 used 2.5.3 and
 found the same behaviours).
 
@@ -47,8 +48,9 @@ whose code will.
 | `transform` with a signed permutation (det = +1) is exact: the bounding box is permuted exactly, and the volume and `NoError` status are unchanged. `translate(−min)` then puts the bounding-box minimum **exactly** at (0, 0, 0), even at awkward float coordinates (checked on a box scaled by 25.4). `bounding_box()` is `(xmin, ymin, zmin, xmax, ymax, zmax)`. | 3.5.5 | `grid.to_cutting_frame`, `grid.extent` | `manifold.signed_permutation_exact` |
 | `CrossSection(contours, FillRule.EvenOdd)`, `decompose()` and `to_polygons()` work; outer contours come back with positive area and holes negative. An **empty** cross-section (a slice that misses the body) decomposes into one component with no contours. | 3.5.5 | `geometry.crosssection_from_contours`, `geometry.crosssection_to_polygons`, `geometry.section` (skips the empty component) | `manifold.crosssection_evenodd` (the empty case: `tests/unit/test_sections.py`) |
 | `^` intersects two CrossSections (and two Manifolds); `Manifold.extrude(cs, h)` works. | 3.5.5 | `geometry.cut_region`, `geometry.overlap_area`, `geometry.prism`, `cutting._cut_merged` (footprints), `cutting._overlap` (a volume only: a Manifold intersection can leave flaps, row below); `labels` *(Phase 8)* | `manifold.crosssection_xor_extrude` |
-| `ray_cast(origin, endpoint)` returns hits sorted by distance, nearest first (checked through three bodies in both directions). `RayHit.distance` is a **fraction of the segment**, not mm; `RayHit.position` is in mm. A face the origin lies on is not reported. | 3.5.5 | `geometry.ray_depth` | `manifold.ray_cast` |
-| `min_gap(other, search_length)` gives 2.0 for two r = 2.7 cylinders (64 segments) with axes 7.4 mm apart, and 0 when they cross. | 3.5.5 | `connectors` *(Phase 5)*; I5, ADR-0014 | `manifold.min_gap` |
+| `ray_cast(origin, endpoint)` returns hits sorted by distance, nearest first (checked through three bodies in both directions). `RayHit.distance` is a **fraction of the segment**, not mm; `RayHit.position` is in mm. A face the origin lies on is not reported. | 3.5.5 | `geometry.ray_depth` (`connectors.available_depth`); `connectors._too_close` (an axis meeting another hole) | `manifold.ray_cast` |
+| `min_gap(other, search_length)` gives 2.0 for two r = 2.7 cylinders (64 segments) with axes 7.4 mm apart, **within float noise below it** (1.999999999999993), 0 when they cross, and `search_length` when nothing is that close. It is slow on crossing solids: about 2 ms for two 64-segment holes, against 0.15 ms when they are close but apart. | 3.5.5 | `connectors._too_close` (gap ≥ w − `LENGTH_TOLERANCE`; bounding boxes and a ray cast first); I5, ADR-0014 | `manifold.min_gap` |
+| **Booleans are lazy**: `+`, `-`, `^` and `batch_boolean` return at once, and the work is done at the first query (`bounding_box()`, `volume()`, `ray_cast`, …). A union of a 64-segment cylinder and a cone costs about 3 ms there. `Manifold.revolve` of the same profile builds the mesh directly (0.14 ms), with the same volume (to 1e-5 mm³) and, like `Manifold.cylinder`, a vertex at angle 0 on +x. | 3.5.5 | `geometry.hole_solid` (revolves the hole profile; one per candidate and side) | `manifold.revolve_hole` |
 | `simplify(tolerance)` keeps the result manifold. | 3.5.5 | `repair.prepare` (`--simplify`) | `manifold.simplify` |
 | A difference whose cutter face is coplanar with a model face opens the hole through that face, with no closing skin (exact volume and surface area, and a ray from above reaches the pocket floor); a union whose face is coplanar with a model face gives one body with the exact volume. | 3.5.5 | `tools` *(Phase 7)* | `manifold.coplanar_booleans` |
 | `slice` exactly at a step height is one-sided (column under a plate: 1600 mm² instead of the 100 mm² contact); the intersection of the slices at ±ε gives 100 mm² for both step directions. | 3.5.5 | `geometry.cut_region`; ADR-0002 | `manifold.slice_at_step` |
@@ -77,7 +79,7 @@ whose code will.
 
 | Behaviour | Version | Used by | Spike check |
 |---|---|---|---|
-| Negative `buffer`, `ops.polylabel`, `contains` and `intersection` work as expected on a 10 mm square. | 2.2.0 | `geometry.polylabel_point`, `geometry.clip_to_cells` (intersection), `cutting._piece_at` (contains); `connectors` *(Phase 5)* | `shapely.operations` |
+| Negative `buffer`, `ops.polylabel`, `contains` and `intersection` work as expected on a 10 mm square. The vectorized `shapely.contains_xy` **excludes the boundary**. | 2.2.0 | `geometry.polylabel_point`, `geometry.clip_to_cells` (intersection), `cutting._piece_at` (contains); `connectors.safe_region` (buffer), `connectors.candidates` (`contains_xy`) | `shapely.operations` |
 
 ### pymeshlab (optional)
 

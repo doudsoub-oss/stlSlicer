@@ -8,7 +8,8 @@ function is pure: repair functions work on a copy of their input.
 Inputs and outputs are in mm. Unless stated otherwise, solids are in the cutting frame and 2D
 data is in plane-local (u, v) coordinates (§4.2, docs/ARCHITECTURE.md "Frames"). The section
 helpers (Phase 4) take a plane by its axis and offset: ``section``, ``cut_region`` (ADR-0002),
-``clip_to_cells``, ``shadow`` and ``prism``. Solids are cut with ``split_at`` and ``clip``,
+``clip_to_cells``, ``shadow`` and ``prism``; so do ``hole_solid`` and ``local_point``
+(Phase 5). Solids are cut with ``split_at`` and ``clip``,
 which work by difference: an intersection (``split_by_plane``, ``trim_by_plane``, ``^``) leaves
 a zero-thickness flap where a model face lies on the cut (docs/LIBRARY_NOTES.md).
 """
@@ -340,6 +341,87 @@ def cylinder_solid(
     return solid.translate((0.0, 0.0, z0))
 
 
+def hole_solid(
+    axis: Axis,
+    offset: float,
+    uv: tuple[float, float],
+    side: int,
+    depth: float,
+    radius: float,
+    chamfer: float,
+    segments: int,
+) -> Manifold:
+    """Return a blind hole drilled from a cut plane into one side, with its mouth chamfer.
+
+    The bore and the chamfer are radius-compensated (their flats at the requested radii,
+    §6.2). The chamfer is a 45° cone from ``radius + chamfer`` at the plane to ``radius`` at
+    depth ``chamfer`` (no deeper than the hole). Connector placement (Phase 5) checks the gaps
+    between these solids; the tools (Phase 7) cut them, so both see the same shape.
+
+    The solid is one ``Manifold.revolve`` of its profile, with a vertex at angle 0 as
+    ``Manifold.cylinder`` has. A union of a cylinder and a cone would give the same solid, but
+    booleans are evaluated lazily and that one costs about 3 ms at the first query, against
+    0.14 ms (docs/LIBRARY_NOTES.md, ``manifold.revolve_hole``); placement builds a hole for
+    every candidate.
+
+    Args:
+        axis: The plane's axis.
+        offset: The plane's offset, mm, cutting frame.
+        uv: The hole's axis point, plane-local (u, v), mm.
+        side: −1 for the neg piece (the hole runs towards local z < offset), +1 for the pos
+            piece.
+        depth: Depth from the plane, mm (> 0).
+        radius: Bore radius, mm (r_h for a hole, r_h + w for the containment probe; > 0).
+        chamfer: Mouth chamfer, mm (ch_h); 0 for none.
+        segments: Polygon sides (``advanced.circular_segments``, ≥ 3).
+
+    Returns:
+        The hole, cutting frame.
+
+    Raises:
+        ValueError: If ``side`` is not ±1, ``depth``, ``radius`` or ``segments`` is out of range,
+            or ``chamfer < 0``.
+    """
+    if side not in (-1, 1) or depth <= 0 or radius <= 0 or chamfer < 0 or segments < 3:
+        raise ValueError(
+            f"invalid hole: side={side}, depth={depth}, radius={radius}, chamfer={chamfer}, "
+            f"n={segments}"
+        )
+    factor = 1.0 / math.cos(math.pi / segments)
+    bore = radius * factor
+    height = min(chamfer, depth)
+    mouth = (radius + chamfer) * factor
+    # The profile in (radius, z), counter-clockwise, for a hole from z = 0 up to z = depth.
+    profile = [(0.0, 0.0), (mouth, 0.0)]
+    if height > 0:
+        profile.append(((radius + chamfer - height) * factor, height))
+    profile += [(bore, depth), (0.0, depth)]
+    if side < 0:  # mirrored to run from z = 0 down to −depth, still counter-clockwise
+        profile = [(r, -z) for r, z in reversed(profile)]
+    outline = np.array(profile, dtype=np.float64)
+    local = Manifold.revolve(CrossSection([outline]), segments)
+    local = local.translate((uv[0], uv[1], offset))
+    return local.transform(local_to_world(axis))
+
+
+def local_point(axis: Axis, u: float, v: float, z: float) -> Point3:
+    """Return the cutting-frame point of plane-local coordinates (u, v, z) (§4.2).
+
+    Args:
+        axis: The plane's axis.
+        u: Local x, mm.
+        v: Local y, mm.
+        z: Local z, mm: the coordinate along ``axis`` (the plane at offset o is z = o).
+
+    Returns:
+        (x, y, z) in the cutting frame, mm.
+    """
+    point = [0.0, 0.0, 0.0]
+    for local, world in zip((u, v, z), _LOCAL_AXES[axis], strict=True):
+        point[world] = local
+    return _point(point)
+
+
 def crosssection_from_contours(contours: Iterable[ArrayLike]) -> CrossSection:
     """Build a 2D cross-section from closed contours with the EvenOdd fill rule.
 
@@ -488,17 +570,24 @@ def clip_to_cells(
     parts = [
         part
         for polygon in polygons
-        for part in _polygon_parts(polygon.intersection(rectangle))
+        for part in polygon_parts(polygon.intersection(rectangle))
         if part.area > AREA_TOLERANCE
     ]
     return sorted_by_polylabel(parts)
 
 
-def _polygon_parts(shape: BaseGeometry) -> list[Polygon]:
-    """The polygons in a shapely result, dropping its points and lines."""
+def polygon_parts(shape: BaseGeometry) -> list[Polygon]:
+    """Return the non-empty polygons in a shapely result, dropping its points and lines.
+
+    Args:
+        shape: Any shapely geometry (a buffer or an intersection), (u, v) in mm.
+
+    Returns:
+        Its polygons, in shapely's order (deterministic for a given input).
+    """
     if isinstance(shape, Polygon):
         return [] if shape.is_empty else [shape]
-    return [part for item in getattr(shape, "geoms", ()) for part in _polygon_parts(item)]
+    return [part for item in getattr(shape, "geoms", ()) for part in polygon_parts(item)]
 
 
 def shadow(body: Manifold, axis: Axis) -> CrossSection:

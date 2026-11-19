@@ -4,12 +4,13 @@ Split an STL model that is too big for your printer into pieces that each fit th
 with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
 assembly map telling you which piece goes where.
 
-> **Status:** under development (Phase 4 of PLAN.md). The command line, the configuration, the
-> output-directory policy, loading and repairing the input STL, auto-orientation, the grid and
-> the cutting into pieces and cut faces work, and `--dry-run` prints the grid, the pieces and
-> the faces. Connectors and output files don't exist yet, so the split and dry run stop with a
-> warning after the cutting, and the calibration after its checks. Sections marked TODO are
-> filled in as the features land.
+> **Status:** under development (Phase 5 of PLAN.md). The command line, the configuration, the
+> output-directory policy, loading and repairing the input STL, auto-orientation, the grid, the
+> cutting into pieces and cut faces, and the placement of the connectors work, and `--dry-run`
+> prints the grid, the pieces, the faces, the connectors and the pins to print. The holes and
+> output files don't exist yet, so the split and dry run stop with a warning after the
+> connector placement, and the calibration after its checks. Sections marked TODO are filled
+> in as the features land.
 
 ```bash
 stlsplit model.stl -o ./out --bed 220 220 250

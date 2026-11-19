@@ -115,7 +115,7 @@ mark; UTF-16 with a byte order mark (what PowerShell 5.1's `>` writes) is accept
 | `--deep-repair` | `repair.deep` | `false` | — | Fall back to pymeshlab if basic repair fails (install the `deep-repair` extra, GPL-3.0) | — |
 | `--connector TYPE` | `connectors.type` | `"dowel"` | — | `dowel` (holes on both sides, loose pins), `peg` (pegs on one side) or `none` (ADR-0005) | `dowel`, `peg`, `none` |
 | `--dowel-diameter MM` | `connectors.diameter` | `5.0` | mm | Pin diameter d | > 0 |
-| `--dowel-length MM` | `connectors.length` | `20.0` | mm | Exact length of a full pin, L_max. Shallow faces get shorter standard lengths (PLAN.md §6.2) | ≥ L_min = `pin_min_length_factor` × d (15 by default); in peg mode, length / 2 < U on every axis |
+| `--dowel-length MM` | `connectors.length` | `20.0` | mm | Exact length of a full pin, L_max. Shallow faces get shorter standard lengths (PLAN.md §6.2) | ≥ L_min = `pin_min_length_factor` × d (15 by default); ≤ the longer side of the bed plate, max(bed X, bed Y) (pins are printed lying down); in peg mode, length / 2 < U on every axis |
 | `--clearance MM` | `connectors.clearance` | `0.2` | mm | Radial clearance added to holes; depends on your printer, measure it with `--calibrate` | ≥ 0 |
 | `--min-wall MM` | `connectors.min_wall` | `2.0` | mm | Minimum material around and between holes | > 0 |
 | `--max-connectors-per-face N` | `connectors.max_per_face` | `4` | — | Maximum connectors per cut face | Integer ≥ 1 |

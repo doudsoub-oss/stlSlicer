@@ -20,12 +20,12 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 
 | Module | Responsibility | May import | Status |
 |---|---|---|---|
-| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`, `Piece`, `CutFace`; the others come with their phase) |
+| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`, `Piece`, `CutFace`, `Connector`; the others come with their phase) |
 | `errors` | Exit codes, exception types, diagnostic registry | `models` | ✓ |
 | `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` | ✓ |
-| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders | `config`, `models` | ✓ |
+| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders and holes | `config`, `models` | ✓ |
 | `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
-| `connectors` | Connector placement | `geometry` | TODO (Phase 5) |
+| `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) | ✓ |
 | `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` | ✓ (nudging in Phase 6) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
 | `labels` | Text outlines and layout on a face | `geometry` | TODO (Phase 8) |
@@ -33,7 +33,7 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `calibrate` | Calibration kit | `tools`, `labels` | TODO (Phase 7) |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup; writing in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the cutting until the next stages exist) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the connector placement until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -105,13 +105,15 @@ Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
 | `Grid` | `models` | Phase 3 | U, cell counts and planes per axis, and the model's extent in the cutting frame |
 | `Piece` | `models` | Phase 4 | ID, cell, body (cutting frame), face IDs, and the IDs of the small pieces merged into it; `label` comes in Phase 8 |
 | `CutFace` | `models` | Phase 4 | ID, plane, neg and pos piece IDs, and the contact region (shapely polygon in plane-local (u, v)) |
+| `Connector` | `models` | Phase 5 | ID `{face}/c{n}`, face, kind (`dowel` or `peg`), axis point (u, v), d, pin length L, hole depth on each side (0 on a peg's side) |
 
 `grid.Rotation` (a candidate of auto-orient: name and 3×3 integer matrix) stays in `grid`:
 only `grid` uses it.
 
 `cutting.Cut` (pieces, faces, diagnostics: what the cutting stage returns) stays in `cutting`:
-only the CLI reads it. Planned: `Connector` (Phase 5), `Label` (Phase 8), `AssemblyStep`
-(Phase 9).
+only the CLI reads it. `connectors.Placement` (connectors, diagnostics) likewise stays in
+`connectors`, with `Selection`, `Hole` and `Fit`, which only the placement uses. Planned:
+`Label` (Phase 8), `AssemblyStep` (Phase 9).
 
 ## Cutting
 
@@ -140,6 +142,33 @@ cutting.check_pieces         I1, I3 (AssertionError = exit 4); W008 for faceless
 - `cutting` imports `grid` for `cell_indices`, `cell_bounds` and `fits` (PLAN.md Appendix E,
   r7). The CLI logs `cutting: 8 pieces, 12 cut faces` and the dry run lists every piece
   (volume, `merged_from`) and face (plane, area).
+
+## Connector placement
+
+```
+pieces + faces (face order)
+  │  per face:
+  │  connectors.safe_region     region.buffer(−(w + r_h + ch_h))          → MultiPolygon
+  │  connectors.candidates      g grid inside + polylabel per part, (u, v) order
+  │  connectors.connector_count 0 / 1 (hull diameter < s_min) / clamp(area / A, 2, k_max)
+  │  connectors.select          hull-diameter pair, then farthest from the accepted ones
+  │    └─ check_candidate       rays → standard length → containment → min_gap vs the piece's holes
+  ▼
+Placement: connectors (face order, then acceptance) + W002 / W009 or W001
+```
+
+- Every number comes from `config.derived(cfg)` (cached in `connectors`, a `Config` is
+  hashable) and the constants `RAY_START_OFFSET`, `RAY_CIRCLE_COUNT`, `RAY_LENGTH_MARGIN`,
+  `GAP_SEARCH_MARGIN`, `MAX_CANDIDATE_TRIALS`, `LENGTH_TOLERANCE`.
+- `select` takes the 3D checks as a callback, so the trial order is unit-tested in 2D
+  (`tests/unit/test_placement.py`).
+- The holes accepted so far, per piece, are the only state carried from face to face: a hole
+  accepted on one face rejects colliding candidates on the faces after it.
+- Holes are `geometry.hole_solid` (a revolved profile: bore r_h plus the mouth chamfer, radii
+  compensated), the solids Phase 7's tools will cut, so the collision check and the output
+  agree.
+- The CLI logs `connectors: 8 on 2 of 2 cut faces`; the dry run lists every connector and the
+  loose pins by diameter and length.
 
 ## Frames
 
@@ -199,8 +228,8 @@ PLAN.md §5.3. "Asserted" means checked at run time (a failure is a bug: exit 4)
 | I2 | Every final piece fits U | `grid.even_grid` (cells, via `grid.fits`); `cutting.merge_small_pieces` refuses a merge that wouldn't fit | `tests/unit/test_grid.py`, `test_cutting.py`; final pieces with pegs: TODO (Phase 7) |
 | I3 | Before tools, the piece volumes add up to the reference volume within 0.1 % | `cutting.check_pieces` | `test_cutting.py` (hypothesis property, voids, merges) |
 | I4 | Every cut face has one piece on each side, and its region lies inside both sections | by construction (`cutting.cut_faces`) | `test_cutting.py` (`assert_regions_lie_in_both_pieces`) |
-| I5 | No two holes of a piece are closer than `min_wall` | TODO (Phase 5) | TODO (Phase 5) |
-| I6 | Every connector's axis point lies in its face's safe region | TODO (Phase 5) | TODO (Phase 5) |
+| I5 | No two holes of a piece are closer than `min_wall` | by construction (`connectors.check_candidate` rejects a closer hole, `min_gap`) | `tests/integration/test_connectors.py` (2 × 2 × 2 cube, 15 mm pieces) |
+| I6 | Every connector's axis point lies in its face's safe region | `connectors.place` (`AssertionError`) | `tests/integration/test_connectors.py` (`assert_inside_safe_regions`) |
 | I7 | Every assembly step joins two sub-assemblies along faces perpendicular to its axis | TODO (Phase 9); the merge's footprint guard keeps it possible (docs/ALGORITHMS.md) | TODO (Phase 9) |
 
 ## Diagnostics flow

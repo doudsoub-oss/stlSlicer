@@ -95,10 +95,28 @@ exit with 3.
 | W012 | info | The model already fits: nothing to cut |
 
 ### W001 — Cut face without connector (partial)
-TODO (Phase 5)
+A cut face got no dowel hole (or peg), so the two pieces meet there without anything to align
+them; the run exits 3. The message gives the face and the reason:
+- `no room`: once inset by `min_wall + d/2 + clearance + hole_chamfer` (5.1 mm by default)
+  nothing of the face is left. Typical for thin walls: a hollow model's 2 mm shell, a plate
+  thinner than about 10 mm cut across.
+- `all N candidate points failed the 3D checks` (or `the first 256 of N`): there is room on
+  the face, but every position tried is too shallow behind the face (shorter than the
+  shortest pin's hole plus `min_wall` on a side), has a wall too close to the hole further in,
+  or comes closer than `min_wall` to a hole of another face of the same piece.
+
+Fix: glue the face without a pin, or give the connectors more room: a smaller
+`--dowel-diameter` (also shortens the shortest pin, 3 × d), a smaller `--min-wall`, or a
+different `--bed` / `--margin` so the planes fall elsewhere. Plane nudging (Phase 6) will move
+planes away from faces like these. [Details](ALGORITHMS.md#connector-placement).
 
 ### W002 — Pin shortened (warning)
-TODO (Phase 5)
+Some pins of a face are shorter than `--dowel-length`, because a piece is too shallow behind
+the face for a full pin's hole: the message lists the connectors and their lengths. Each hole
+is `L/2 + axial_play` deep and needs `min_wall` beyond its bottom, so 12 mm of material behind
+a face takes an 18 mm pin, not a 20 mm one. Only the standard lengths are used (20, 18 and
+16 mm by default: steps of `pin_length_step` down to 3 × d), so the pins come in few sizes.
+Nothing to do: print the pins the output lists. In peg mode, the peg itself is shorter.
 
 ### W003 — Label skipped (warning)
 TODO (Phase 8)
@@ -143,7 +161,10 @@ connector and no label. Nothing to do; place it by hand when assembling. Not rep
 the model fits in one cell (W012).
 
 ### W009 — Single connector on a face (info)
-TODO (Phase 5)
+A face has room for only one connector (no two positions 15 mm apart, i.e. 3 × d, or only one
+passed the checks). A single round pin aligns the two pieces but lets them turn around it, so
+hold them in the right position until the glue sets. stlsplit always places two connectors
+when two fit.
 
 ### W010 — Overlapping shells merged (info)
 The file holds several closed shells that overlap, as models assembled from separate meshes

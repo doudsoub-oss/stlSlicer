@@ -11,7 +11,7 @@ import pytest
 import trimesh
 from manifold3d import Manifold
 
-from stlsplit import __version__, cli, config, cutting, errors, grid
+from stlsplit import __version__, cli, config, connectors, cutting, errors, grid
 from stlsplit.config import Config
 from stlsplit.errors import ExitCode
 from stlsplit.models import Grid, Plane
@@ -414,10 +414,56 @@ def test_dry_run_report_lists_the_pieces_a_piece_absorbed() -> None:
         extent=grid.extent(body),
     )
     result = cutting.cut(body, layout, Config(), body.volume())
+    placement = connectors.place(result.pieces, result.faces, Config())
     _, orientation = grid.to_cutting_frame(body, grid.ROTATIONS[0])
-    lines = cli.dry_run_report(orientation, layout, result).splitlines()
+    lines = cli.dry_run_report(orientation, layout, result, placement).splitlines()
     assert "piece X0-Y0-Z0: volume 950360 mm^3; merged from X1-Y0-Z0" in lines
     assert "cut faces: 1" in lines
+
+
+def test_dry_run_prints_the_connectors_and_the_pins(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    argv = [str(stl), "--dry-run", "--bed", "220", "220", "220"]
+    assert cli.main(argv) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "connectors: 8" in lines
+    assert (
+        "connector X0-Y0-Z0~X1-Y0-Z0/c1: dowel at (u, v) = (6.25, 6.25), pin 20 mm, "
+        "holes 10.5 + 10.5 mm" in lines
+    )
+    assert (
+        "connector X1-Y0-Z0~X2-Y0-Z0/c4: dowel at (u, v) = (93.75, 6.25), pin 20 mm, "
+        "holes 10.5 + 10.5 mm" in lines
+    )
+    assert "pins: 8" in lines
+    assert "pin 5 x 20 mm: 8" in lines
+    assert "connectors: 8 on 2 of 2 cut faces" in captured.err
+
+
+def test_dry_run_with_pegs_lists_no_loose_pins(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    argv = [str(stl), "--dry-run", "--bed", "220", "220", "220", "--connector", "peg"]
+    assert cli.main(argv) == ExitCode.SUCCESS
+    lines = capsys.readouterr().out.splitlines()
+    assert "connectors: 8" in lines
+    assert any(line.endswith("pin 20 mm, holes 0 + 10.5 mm") for line in lines)
+    assert "pins: 0" in lines
+
+
+def test_face_without_a_connector_makes_the_run_exit_3(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An 8 mm plate cut across: its 100 x 8 faces have no room for a hole.
+    stl = write_stl(Manifold.cube((300.0, 100.0, 8.0)), "plate")
+    assert cli.main([str(stl), "--dry-run"]) == ExitCode.PARTIAL
+    captured = capsys.readouterr()
+    assert "W001" in captured.err
+    assert "connectors: 0" in captured.out.splitlines()
 
 
 def test_dry_run_prints_the_rotation_and_translation(
