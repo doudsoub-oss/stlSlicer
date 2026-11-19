@@ -55,6 +55,19 @@ Without it, float rounding in L_max − k·Δ can drop a standard length equal t
 example 16 − 64 × 0.1 < 3.2 × 3 in floats).
 """
 
+OUTPUT_DECIMALS = 6
+"""Floats in JSON, Markdown and the dry-run plan are rounded to this many decimals (§4.1)."""
+
+GRID_TOLERANCE = 1e-9
+"""Relative slack of the even grid (Phase 3), dimensionless.
+
+Cells per axis: ``n = max(1, ceil(extent / U − GRID_TOLERANCE))``, so float noise in an
+extent that is an exact multiple of U doesn't add a cell. A cell can then exceed U by up to
+this fraction of U (0.2 nm at U = 210), so a cell fits when ``size ≤ U · (1 + GRID_TOLERANCE)``,
+evaluated as ``size / U − GRID_TOLERANCE ≤ 1``, the count's own expression (``grid.fits``;
+PLAN.md Appendix E, r6).
+"""
+
 SCALE_WARNING_MIN = 1.0
 """W006 when the model's largest dimension is below this, mm (§4.5): probably not in mm."""
 SCALE_WARNING_MAX = 5000.0

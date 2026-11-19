@@ -9,13 +9,21 @@ reversed winding, unmerged) can't be a valid ``Manifold``, so they are built as
 ``trimesh.Trimesh`` with ``process=False``, which keeps them exactly as constructed.
 """
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
 import trimesh
-from manifold3d import Manifold
+from hypothesis import settings
+from manifold3d import Manifold, OpType
+
+# Hypothesis is derandomized in CI, so a run is reproducible (PLAN.md §4.4, rule 1); local runs
+# stay random and explore more. GitHub Actions sets CI=true.
+settings.register_profile("ci", derandomize=True)
+if os.environ.get("CI"):
+    settings.load_profile("ci")
 
 SPHERE_SEGMENTS = 64
 """Segments of the fixture spheres: the hollow sphere's volume is then 0.56 % under the
@@ -131,6 +139,37 @@ def duplicated_cube(inside_out: bool = False) -> trimesh.Trimesh:
     if inside_out:
         mesh = _reversed(mesh)
     return _concatenate(mesh, mesh.copy())
+
+
+def long_box() -> Manifold:
+    """A 500 × 100 × 100 box with its minimum corner at the origin (the grid tests)."""
+    return Manifold.cube((500.0, 100.0, 100.0))
+
+
+CHIRAL_L_MARKS: tuple[tuple[float, float, float], ...] = (
+    (0.0, 0.0, 0.0),
+    (40.0, 0.0, 0.0),
+    (0.0, 30.0, 0.0),
+    (0.0, 0.0, 20.0),
+)
+"""Vertices of ``chiral_l``: the corner, then the tips of the X, Y and Z arms. The edge
+vectors from the corner to the tips have a positive triple product (40 · 30 · 20)."""
+
+
+def chiral_l() -> Manifold:
+    """A 10 mm corner cube with arms of 3, 2 and 1 more cubes along X, Y and Z.
+
+    Three arms of different lengths make it chiral: its mirror image can't be rotated onto
+    it. A flat L would not do, since it is its own mirror image through its mid-plane.
+    """
+    return Manifold.batch_boolean(
+        [
+            Manifold.cube((40.0, 10.0, 10.0)),
+            Manifold.cube((10.0, 30.0, 10.0)),
+            Manifold.cube((10.0, 10.0, 20.0)),
+        ],
+        OpType.Add,
+    )
 
 
 def two_bodies() -> Manifold:

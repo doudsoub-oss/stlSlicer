@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r5** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r6** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -66,7 +66,7 @@ what surprised you, what to watch.
 | 0 | Scaffolding, documentation skeleton, API spike | done | `2060291`, `44c2cdb` (tag `v0.0.0`) | CI green on Linux 3.12/3.13/3.14, Windows 3.13 and macOS 3.13 (macOS runners can queue for a long time; a job that is never acquired is a capacity problem, re-run it). CI actions are on v7 (Node 24). Dev machine has no system Python ≥ 3.12: use uv (CONTRIBUTING.md). For Phase 1: move `geometry.POLYLABEL_TOLERANCE` to `config.py`; `models.py` holds only `Axis` so far; `errors.py` already has `ExitCode` and the W001–W012 registry. Frames: plane at local z = o both ways (Appendix E, r3). `ruff format` excludes `*.md` (it was rewriting PLAN.md code blocks); manifold3d is in mypy's `ignore_missing_imports` (its `.pyi` has no `py.typed`). Python 3.14 is added to Linux CI. |
 | 1 | Configuration and CLI shell | done | `e869e3b` | For Phase 2: `io.py` exists (output-directory policy, `OWNED_OUTPUTS`, label-font lookup); `io.load_stl` goes there. `cli._run` stops every mode with a "not implemented yet" warning after the checks: replace that stub as stages land; `cli._require_input_file` can move into `io.load_stl`. Stages build diagnostics with `errors.diagnostic()` and return them; `cli.report_diagnostics()` turns them into the exit code. Numbers come from `config.derived(cfg)` only. `pin_length_step` ≥ 0.1 and `circular_segments` ≤ 256 were added after the review (r4). Still open: in dowel mode `connectors.length` has no upper bound, so a huge `--dowel-length` would make `derived()` build (L_max − L_min) / 0.1 standard lengths; bound it (e.g. by the usable volume) when Phase 5 starts using the lengths. `--print-config` writes ASCII; `--config` reads UTF-8 (BOM or not) and UTF-16 with a BOM, for Windows. Symlink tests skip only if the OS refuses to create a symlink. The review found two bugs (huge TOML integers exited 4; the Windows `--print-config > file` round trip), both fixed and tested (PLAN r4). |
 | 2 | Load, repair, shell normalization | done | `f7e568d`, `8d8e6d2` (tag `v0.2.0`) | For Phase 3: `cli._run` loads and repairs (`io.load_stl` → `repair.prepare` → body in the **input frame** plus `RepairReport.reference_volume`, measured after `--simplify`), then stops with a "not implemented yet (Phase 3 onwards)" warning: replace that stub with `grid.orient`. Load and repair run before `io.prepare_output_dir` on purpose (a broken input never touches `-o`). The CLI logs each stage's diagnostics as soon as it returns and keeps the highest exit code. Plan changes in Appendix E r5: the review found that the sign-only shell normalization filled voids (whole model inside out; overlapping hollow parts), so roles now come from containment plus relative orientation, any nesting depth; basic repair keeps each shell's majority orientation (trimesh's `fix_winding` follows one reference face). Edge-touching cubes are valid as is; `finned_cube` is the `--deep-repair` fixture. Fixture gotcha: `Manifold.compose` collapses inside-out shells, so build reversed shells with trimesh concatenation (`tests/conftest.py`). pymeshlab is installed only in the Linux 3.13 and weekly CI jobs; locally `pip install -e ".[dev,deep-repair]"`. Its filter plugins need the system's `libOpenGL.so.0` (Ubuntu: `libopengl0`, installed in CI); without it `geometry.deep_repair_problem()` makes `--deep-repair` exit 2 with that cause instead of crashing (`8d8e6d2`). |
-| 3 | Orientation and even grid | todo | | |
+| 3 | Orientation and even grid | done | `b354c40`, `f63cee3` (tag `v0.3.0`) | For Phase 4: `cli._run` now runs `grid.orient` → `grid.even_grid` after repair, then stops with a "not implemented yet (Phase 4 onwards)" warning: replace that stub with `cutting.split_cells`. From there `body` is in the **cutting frame** (bounding-box minimum exactly at the origin, LIBRARY_NOTES `manifold.signed_permutation_exact`) and `layout` is the `Grid`; `grid.axis_bounds`, `grid.cell_indices` (sorted (i, j, k)) and `grid.cell_bounds` give the cells. `Orientation.input_to_cutting` (4×4, tuples) is for `assembly.json` in Phase 9. Plan changes in Appendix E r6: the cell-fit check is relative (`≤ U · (1 + GRID_TOLERANCE)`; the absolute `U + 1e-9` contradicted the count's relative slack) and, after the review, evaluated in the count's own arithmetic (`grid.fits`: `size / U − tol ≤ 1`), since `size <= U * (1 + tol)` rounded the other way for one float and a valid box exited 4 (`f63cee3`); use `grid.fits` whenever nudging (Phase 6) checks a cell; the six rotations and their tie order are in `grid.ROTATIONS`; `Orientation` lives in `models`; the dry-run plan goes to stdout (`cli.dry_run_report`, extend it as stages land), logs to stderr. First hypothesis tests: `tests/conftest.py` loads a derandomized `ci` profile when `CI` is set. `chiral_l` is a three-armed corner, not a flat L (a flat L is its own mirror image). The grid has no upper bound on the cell count (a 5 m model on a tiny bed): Phase 10 territory. |
 | 4 | Sections, cutting, cut faces, small-piece merge | todo | | |
 | 5 | Connector placement | todo | | |
 | 6 | Plane nudging | todo | | |
@@ -380,6 +380,11 @@ Geometry stays in `manifold3d.Manifold` during processing. Conversion to trimesh
 Axis = Literal[0, 1, 2]                       # 0 = X, 1 = Y, 2 = Z (cutting frame)
 
 @dataclass(frozen=True)
+class Orientation:                            # r6: assembly (Phase 9) writes it, so it lives here
+    name: str                                 # rotation name from grid.ROTATIONS, e.g. "90 deg about Y"
+    input_to_cutting: tuple[tuple[float, float, float, float], ...]   # 4×4 [[R, t], [0, 0, 0, 1]]
+
+@dataclass(frozen=True)
 class Plane:
     axis: Axis
     index: int                                # 0-based position among this axis' planes
@@ -553,7 +558,8 @@ mouth (≥ w).
 
 The dry run goes through every step up to connector placement and label layout, skipping the
 booleans and file writing. It prints the orientation, grid, planes, pieces, faces, connectors, pin
-groups and diagnostics. Its output grows as phases land (Phase 3 prints the grid only).
+groups and diagnostics. Its output grows as phases land (Phase 3 prints the grid only). The plan
+goes to stdout and the log, diagnostics included, to stderr, so `-q` doesn't hide the plan (r6).
 
 ### 7.2 Options
 
@@ -1169,19 +1175,34 @@ internal voids kept). If that's impossible, the tool exits with code 2 and actio
    out of their cell (ADR-0005).
 2. Auto-orient (if on), ADR-0008:
    - Evaluate the 6 assignments of the model's axes to the bed axes, each built as a **proper
-     rotation** (det = +1; for odd permutations, negate one axis).
-   - Cell count = Π ceil(extent_i / U_i). Keep the lowest count.
-   - Ties: identity first, then a fixed order of the six rotations.
+     rotation** (det = +1). An odd permutation swaps two axes; it is built as the +90° turn
+     about the third axis, which negates one of the swapped axes (r6).
+   - Cell count = Π n_i, with n_i from task 4. Keep the lowest count.
+   - Ties: the first in this order (`grid.ROTATIONS`, r6). Rows of R are cutting axes:
+
+     | # | Rotation | cutting (X, Y, Z) = input |
+     |---|---|---|
+     | 1 | identity | (+x, +y, +z) |
+     | 2 | 90° about Z | (−y, +x, +z) |
+     | 3 | 90° about X | (+x, −z, +y) |
+     | 4 | 90° about Y | (+z, +y, −x) |
+     | 5 | 120° about (1,1,1) | (+z, +x, +y) |
+     | 6 | 240° about (1,1,1) | (+y, +z, +x) |
+
+     The model as it is first, then the quarter turn that keeps its Z up, then the other
+     quarter turns, then the turns about the diagonal.
    - Assert det(R) = +1.
 3. Cutting frame: rotate, then translate the bounding-box minimum to the origin. Store the 4×4
    input → cutting transform.
 4. Even grid: `n_i = max(1, ceil(extent_i / U_i − 1e-9))`, with planes at `k · extent_i / n_i` for
    k = 1 … n_i − 1. Even spacing gives pieces of similar size, instead of filling one bed and
-   leaving a sliver.
-5. Cells and their bounds; assert every cell ≤ U_i + 1e-9.
+   leaving a sliver. The 1e-9 is `config.GRID_TOLERANCE`, a relative slack.
+5. Cells and their bounds; assert every cell ≤ U_i · (1 + 1e-9). The bound is relative, like the
+   slack in task 4, and evaluated as `cell / U_i − 1e-9 ≤ 1`, task 4's own expression (r6).
 6. If n = 1 on every axis: W012. The pipeline continues with one piece (no faces, connectors or
    labels) and exits 0.
-7. `--dry-run` prints the rotation, extents, U, cell counts, plane offsets and number of cells.
+7. `--dry-run` prints the rotation, extents, U, cell counts, plane offsets and number of cells,
+   on stdout (r6).
 
 **Tests.**
 - A 500×100×100 box with bed 220³ and margin 5: 3 cells along X, planes at 500/3 and 1000/3 (±1e-6).
@@ -1864,9 +1885,38 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `knob` | Box with a small knob crossing a plane | Small-piece merge |
 | `u_shape` | U-shaped extrusion | Connectors in both arms |
 | `wedge` | A piece that narrows behind its cut face | Depth and containment checks |
-| `chiral_l` | Asymmetric L-shaped polycube | No mirroring |
+| `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r6 — 2026-11-19 (Phase 3).** Found while planning Phase 3, agreed with the maintainer:
+
+- **Cell-fit check:** task 4's slack is relative (`ceil(extent / U − 1e-9)`), so a cell can be
+  up to `U · (1 + 1e-9)`: 2.1e-7 mm over U = 210. Task 5's absolute `cell ≤ U + 1e-9` would
+  then fail with exit 4 on a valid model, e.g. 210.0000001 mm (a vertex a hair below zero, as
+  CAD exports often have). The check is now relative, `cell ≤ U · (1 + GRID_TOLERANCE)`, with
+  one constant `config.GRID_TOLERANCE = 1e-9`. With the formula as written, n is also
+  minimal: n − 1 cells would each be larger than U.
+- **Fit check in the count's arithmetic (Phase 3 review):** `size <= U * (1 + tol)` and
+  `ceil(size / U − tol)` round differently for one float at the edge, so a 100 × 100 × 230 box
+  with its bottom 2.3e-7 mm below zero still exited 4 in peg mode (one cell on U = 230, then
+  "over U"). The check is now `size / U − tol ≤ 1` (`grid.fits`), the count's own expression,
+  and a hypothesis property probes extents within 64 floats of `n · U · (1 + tol)`. The §4.1
+  rounding is the named constant `config.OUTPUT_DECIMALS`.
+- **Odd axis orders:** ADR-0008 leaves the exact construction to Phase 3, which only said
+  "negate one axis". The six rotations and their tie-break order are now listed in Phase 3,
+  task 2, and in `grid.ROTATIONS`.
+- **`Orientation` in `models`:** the input → cutting transform needs a home that `assembly`
+  (Phase 9, which may import only `models` and `config`) can read, so §5.2 gains the
+  `Orientation` dataclass.
+- **Dry-run output on stdout:** the plan goes to stdout, the log to stderr (§7.1), so `-q`
+  doesn't hide the plan and it can be redirected alone.
+- **`chiral_l` fixture:** a flat L-shaped polycube is its own mirror image through its
+  mid-plane, so it can't detect mirroring; the fixture is a corner cube with arms of three
+  different lengths (Appendix D).
+- **Hypothesis profile:** `tests/conftest.py` registers a `ci` profile with
+  `derandomize=True`, loaded when the `CI` environment variable is set (§4.4, rule 1); these
+  are the first hypothesis tests.
 
 **r5 — 2026-11-19 (Phase 2).** Found while planning and implementing Phase 2, agreed with the
 maintainer:

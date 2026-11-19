@@ -14,7 +14,7 @@ from manifold3d import Manifold
 from stlsplit import __version__, cli, config, errors
 from stlsplit.config import Config
 from stlsplit.errors import ExitCode
-from tests.conftest import capless_sphere, cube, missing_face_cube, two_bodies
+from tests.conftest import capless_sphere, cube, long_box, missing_face_cube, two_bodies
 from tests.unit.test_config import EXAMPLE_TOML
 
 WriteStl = Callable[[Manifold | trimesh.Trimesh, str], Path]
@@ -353,6 +353,60 @@ def test_repair_diagnostics_are_reported(
     assert "W007 " in err
     assert "repair: " in err
     assert "repair: none" not in err
+
+
+# --- orientation and grid (PLAN.md Phase 3) -------------------------------------------------
+
+
+def test_dry_run_prints_the_grid_on_stdout(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    argv = [str(stl), "--dry-run", "--bed", "220", "220", "220", "-q"]
+    assert cli.main(argv) == ExitCode.SUCCESS
+    lines = capsys.readouterr().out.splitlines()  # -q hides logs, not the plan
+    assert "rotation: identity; cutting (X, Y, Z) = input (+X, +Y, +Z)" in lines
+    assert "input_to_cutting: [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]" in lines
+    assert "extent: 500 x 100 x 100 mm" in lines
+    assert "usable volume: 210 x 210 x 210 mm" in lines
+    assert "cells: 3 x 1 x 1 = 3" in lines
+    assert "planes X: 166.666667, 333.333333" in lines
+    assert "planes Y: none" in lines
+    assert "planes Z: none" in lines
+
+
+def test_dry_run_prints_the_rotation_and_translation(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(Manifold.cube((460.0, 100.0, 100.0)).translate((5.0, 0.0, 0.0)), "model")
+    assert cli.main([str(stl), "--dry-run"]) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "rotation: 90 deg about Y; cutting (X, Y, Z) = input (+Z, +Y, -X)" in lines
+    assert "input_to_cutting: [0, 0, 1, 0], [0, 1, 0, 0], [-1, 0, 0, 465], [0, 0, 0, 1]" in lines
+    assert "extent: 100 x 100 x 460 mm" in lines
+    assert "cells: 1 x 1 x 2 = 2" in lines
+    assert "planes Z: 230" in lines
+    assert "grid: 1 x 1 x 2 = 2 cells; rotation 90 deg about Y" in captured.err
+
+
+def test_model_that_fits_reports_w012_and_exits_0(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main([str(write_stl(cube(), "model")), "--dry-run"]) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    assert "W012 " in captured.err
+    assert "cells: 1 x 1 x 1 = 1" in captured.out.splitlines()
+
+
+def test_split_logs_the_grid_and_prints_no_plan(
+    write_stl: WriteStl, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    assert cli.main([str(stl), "-o", str(tmp_path / "out")]) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    assert "grid: 3 x 1 x 1 = 3 cells; rotation identity" in captured.err
+    assert captured.out == ""
 
 
 # --- --print-config --------------------------------------------------------------------------

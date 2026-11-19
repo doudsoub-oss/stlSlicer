@@ -3,20 +3,23 @@
 Last stage of the pipeline (PLAN.md §5.1) and, with ``io``, the only module that touches the
 file system. ``main`` parses the arguments, works out the mode (§7.1), builds one validated
 ``Config`` (built-in defaults ← TOML file ← options typed on the command line; §7.4,
-ADR-0011), loads and repairs the input, prepares the output directory (§7.6), runs the stages
-and turns their diagnostics into the exit code (§4.5). Every failure becomes one line on
-stderr; ``-v`` adds the traceback.
+ADR-0011), loads and repairs the input, orients it and builds the grid, prepares the output
+directory (§7.6), runs the stages and turns their diagnostics into the exit code (§4.5).
+Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to stderr; the
+dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
-Load and repair run before the output directory is prepared, so an unusable input never
-creates the directory, and ``--force`` never deletes the previous outputs for it.
+Load, repair, orientation and grid run before the output directory is prepared, so an
+unusable input never creates the directory, and ``--force`` never deletes the previous
+outputs for it.
 
-Phase 2: the stages after repair don't exist yet, so the split and dry-run modes stop with a
-warning after repair, and the calibration mode after the checks.
+Phase 3: the stages after the grid don't exist yet, so the split and dry-run modes stop with
+a warning after the grid, and the calibration mode after the checks.
 """
 
 import argparse
 import codecs
 import logging
+import math
 import sys
 import time
 import traceback
@@ -28,10 +31,10 @@ from typing import Any, NoReturn
 
 from manifold3d import Manifold
 
-from stlsplit import __version__, config, io, repair
-from stlsplit.config import Config
+from stlsplit import __version__, config, grid, io, repair
+from stlsplit.config import OUTPUT_DECIMALS, Config
 from stlsplit.errors import ConfigError, ExitCode, InputError, StlsplitError, exit_code_for
-from stlsplit.models import Diagnostic
+from stlsplit.models import Diagnostic, Grid, Orientation
 
 LOGGER = logging.getLogger("stlsplit")
 """Parent logger of the package; modules log through ``logging.getLogger(__name__)``."""
@@ -434,6 +437,19 @@ def _run(ns: argparse.Namespace) -> ExitCode:
             body, report = repair.prepare(mesh, cfg)
         LOGGER.info("%s", _model_summary(body, report))
         exit_code = max(exit_code, report_diagnostics(report.diagnostics))
+        with stage("orientation"):
+            body, orientation = grid.orient(body, cfg)
+        with stage("grid"):
+            layout, grid_diagnostics = grid.even_grid(grid.extent(body), config.derived(cfg).usable)
+        LOGGER.info(
+            "grid: %s = %d cells; rotation %s",
+            " x ".join(str(n) for n in layout.counts),
+            math.prod(layout.counts),
+            orientation.name,
+        )
+        exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
+        if mode is Mode.DRY_RUN:
+            sys.stdout.write(dry_run_report(orientation, layout))
     if mode is Mode.DRY_RUN:
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
@@ -441,10 +457,58 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         with stage("output directory"):
             io.prepare_output_dir(ns.output, force="force" in ns)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 3 onwards); stopping here",
+        "the %s mode is not implemented yet (PLAN.md Phase 4 onwards); stopping here",
         mode.value,
     )
     return exit_code
+
+
+def dry_run_report(orientation: Orientation, layout: Grid) -> str:
+    """Return the plan the dry run prints on stdout (PLAN.md §7.1, Phase 3 task 7). ASCII only.
+
+    It grows as phases land; Phase 3 prints the orientation and the grid. Numbers are rounded
+    to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros (§4.1).
+
+    Args:
+        orientation: From ``grid.orient``.
+        layout: From ``grid.even_grid``.
+
+    Returns:
+        The text, one item per line, ending with a newline.
+    """
+    matrix = orientation.input_to_cutting
+    lines = [
+        f"rotation: {orientation.name}; cutting (X, Y, Z) = input ({_axis_mapping(matrix)})",
+        "input_to_cutting: "
+        + ", ".join("[" + ", ".join(_number(v) for v in row) + "]" for row in matrix),
+        f"extent: {_sizes(layout.extent)} mm",
+        f"usable volume: {_sizes(layout.usable)} mm",
+        f"cells: {' x '.join(str(n) for n in layout.counts)} = {math.prod(layout.counts)}",
+    ]
+    for name, planes in zip("XYZ", layout.planes, strict=True):
+        offsets = ", ".join(_number(plane.offset) for plane in planes)
+        lines.append(f"planes {name}: {offsets or 'none'}")
+    return "\n".join(lines) + "\n"
+
+
+def _axis_mapping(matrix: tuple[tuple[float, float, float, float], ...]) -> str:
+    """Which signed input axis each cutting axis takes, e.g. ``+Z, +Y, -X``."""
+    terms = []
+    for row in matrix[:3]:
+        axis = next(index for index in range(3) if row[index] != 0)
+        terms.append(("+" if row[axis] > 0 else "-") + "XYZ"[axis])
+    return ", ".join(terms)
+
+
+def _sizes(values: Iterable[float]) -> str:
+    return " x ".join(_number(value) for value in values)
+
+
+def _number(value: float) -> str:
+    """A float rounded to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros; never ``-0``."""
+    # + 0.0 turns the -0.0 that round() gives for tiny negatives into 0.0.
+    rounded = round(value, OUTPUT_DECIMALS) + 0.0
+    return f"{rounded:.{OUTPUT_DECIMALS}f}".rstrip("0").rstrip(".")
 
 
 def _model_summary(body: Manifold, report: repair.RepairReport) -> str:

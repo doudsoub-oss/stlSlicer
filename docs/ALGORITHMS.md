@@ -102,10 +102,83 @@ Tests: `tests/integration/test_repair.py` (one test per case above),
 `tests/unit/test_io.py` (loading, W006), `tests/unit/test_cli.py` (exit 2 through the CLI).
 
 ## Auto-orientation
-TODO (Phase 3)
+
+Chooses how the model sits on the bed (ADR-0008). Input: the repaired body (mm, input frame)
+and U from `config.derived(cfg).usable`. Output: the body in the **cutting frame** and an
+`Orientation` holding the 4×4 input → cutting transform.
+
+**1. Candidates.** The six axis orders, each built as a proper rotation (det = +1), listed in
+`grid.ROTATIONS` in tie-break order. Rows are cutting axes: cutting X takes the first signed
+input axis, and so on.
+
+| # | Name | cutting (X, Y, Z) = input | R |
+|---|---|---|---|
+| 1 | `identity` | (+X, +Y, +Z) | `[[1,0,0],[0,1,0],[0,0,1]]` |
+| 2 | `90 deg about Z` | (−Y, +X, +Z) | `[[0,-1,0],[1,0,0],[0,0,1]]` |
+| 3 | `90 deg about X` | (+X, −Z, +Y) | `[[1,0,0],[0,0,-1],[0,1,0]]` |
+| 4 | `90 deg about Y` | (+Z, +Y, −X) | `[[0,0,1],[0,1,0],[-1,0,0]]` |
+| 5 | `120 deg about (1,1,1)` | (+Z, +X, +Y) | `[[0,0,1],[1,0,0],[0,1,0]]` |
+| 6 | `240 deg about (1,1,1)` | (+Y, +Z, +X) | `[[0,1,0],[0,0,1],[1,0,0]]` |
+
+An odd axis order swaps two axes. A plain permutation matrix would then have det = −1 and
+mirror the model (a left shoe becomes a right one), so it is built as the +90° turn about the
+third axis, which negates one of the two swapped axes. The even orders are the identity and the
+two cyclic permutations.
+
+**2. Choice.** Each candidate's cell count is Π `cell_count(extent_i, U_i)` (below) of its
+rotated extent. The extents are just permuted, so no mesh is transformed to compare them.
+The lowest count wins. On a tie, the first in the table wins: the model as it is, then the
+quarter turn that keeps its Z up, then the other quarter turns, then the diagonal turns.
+`--no-auto-orient` always takes the identity.
+
+- 460 × 100 × 100 on the default bed (U = 210 × 210 × 240): the identity needs
+  3 · 1 · 1 = 3 cells; rows 4 and 6 put the 460 mm side along Z, 1 · 1 · ceil(460/240) = 2.
+  Row 4 is listed first and wins.
+- 500 × 100 × 100 on a 220³ bed: every candidate needs 3 cells, so the identity stays.
+
+**3. Cutting frame.** `x_cut = R · x_in + t`: rotate, then translate so that the bounding-box
+minimum is the origin. With a signed permutation, both steps are exact, and the minimum is
+exactly (0, 0, 0) (docs/LIBRARY_NOTES.md). `Orientation.input_to_cutting` is
+`[[R, t], [0, 0, 0, 1]]`, row by row. Phase 9 writes it to `assembly.json`, so any tool can map
+the parts back onto the original model.
+
+Code: `grid.orient`, `grid.choose_rotation`, `grid.to_cutting_frame`. Tests:
+`tests/unit/test_grid.py` (`test_auto_orient_*`, `test_every_candidate_rotation_is_a_proper_rotation`,
+`test_chiral_l_keeps_its_handedness`, for every rotation).
 
 ## Even grid
-TODO (Phase 3)
+
+Splits each axis into the fewest equal cells that fit U (ADR-0003). Input: the extent in the
+cutting frame and U. Output: a `Grid` (counts, planes, U, extent), plus W012 when the model
+already fits.
+
+- **Count per axis:** `n = max(1, ceil(extent / U − 1e-9))`. The slack (`GRID_TOLERANCE`) keeps
+  float noise in an extent that is an exact multiple of U from adding a cell: 420.00000000000006
+  on U = 210 gives 2 cells, not 3.
+- **Planes** at `k · extent / n`, k = 1 … n − 1, with `Plane.index` = k − 1. 500 mm on
+  U = 210: 3 cells, planes at 166.666667 and 333.333333. Equal cells give pieces of similar
+  size, where filling two beds would leave an 80 mm sliver.
+- **Cells** (i, j, k) span, along each axis, two consecutive values of
+  `grid.axis_bounds`: 0, the plane offsets, then the extent. `grid.cell_indices` lists them
+  sorted by (i, j, k); `grid.cell_bounds` gives one box.
+- **Fit check** (`grid.fits`): every cell's size is at most `U · (1 + 1e-9)`; otherwise it is
+  a bug (exit 4). The bound is relative because the count's slack is: a cell can be up to
+  0.2 nm over U = 210 (PLAN.md Appendix E, r6). It is evaluated as `size / U − 1e-9 ≤ 1`, the
+  count's own expression. Written as `size <= U * (1 + 1e-9)`, it rounded differently for one
+  float at the edge: a 100 × 100 × 230 box whose bottom sat 2.3e-7 mm below zero (float32
+  export noise) counted as one cell on U = 230, then failed the check. With two cells or more,
+  the slack leaves a margin of at least 5e-10 for the rounding of `k · extent / n`. With the
+  formula, n is also minimal: n − 1 cells would each be larger than U.
+- **Peg mode:** U is smaller by L_max/2 per axis (200 × 200 × 230 by default), because pegs
+  stick out of their cell (ADR-0005). It comes from `config.derived`, like every number.
+- **One cell on every axis:** W012 (info), "nothing to cut". The pipeline continues with one
+  piece, without faces, connectors or labels, and exits 0.
+
+Nudging (Phase 6) then moves planes within ± `nudge_window`, keeping every cell inside U.
+
+Code: `grid.even_grid`, `grid.cell_count`. Tests: `tests/unit/test_grid.py` (the long box,
+the tolerance cases, peg mode, W012, and the hypothesis properties
+`test_every_cell_fits_the_usable_volume` and `test_cell_counts_are_minimal`).
 
 ## Cut regions
 TODO (Phase 4)

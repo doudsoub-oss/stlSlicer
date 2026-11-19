@@ -8,12 +8,12 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Axial play** (a) | Extra hole depth beyond each pin end: room for glue, and the pin never bottoms out. |
 | **Body** | One connected solid. A grid cell can contain several bodies. |
 | **Calibration kit** | Two small bars with holes of increasing clearance, printed once to choose `--clearance`. |
-| **Cell** | One box of the grid, indexed (i, j, k) from 0 along X, Y, Z. |
+| **Cell** | One box of the grid, indexed (i, j, k) from 0 along X, Y, Z. Its sides lie between consecutive planes (or 0 and the model's extent), and it fits the usable volume. |
 | **Clearance** (c) | Radial gap added to every hole so a pin fits; printer-dependent. |
 | **Connector** | A dowel hole pair or a peg and its hole, on a cut face. ID `{face}/c{n}`. |
 | **Cut face** | The contact area between two pieces on one cut plane. ID `{neg piece}~{pos piece}`, plus `#2`, `#3`, … for several regions of the same pair. |
 | **Cut plane** | An axis-aligned plane where the model is cut, defined by its axis, index and offset. |
-| **Cutting frame** | The coordinate frame after auto-orientation and translation to the origin; all pipeline geometry and output files use it. |
+| **Cutting frame** | The coordinate frame after auto-orientation and translation to the origin: x_cut = R · x_in + t, R one of six proper rotations (never a mirror), t putting the model's bounding-box minimum at (0, 0, 0). All pipeline geometry and output files use it. |
 | **Diagnostic** | A coded message (`W001`…) with a severity (`info`, `warning`, `partial`) and the IDs it concerns. |
 | **Dowel / pin** | A loose cylindrical pin printed separately, lying on its flat. |
 | **Even grid** | The grid that splits each axis into equal cells, the fewest that fit the usable volume. |
@@ -34,5 +34,5 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Shell normalization** | Repair step that decides from containment and orientation which shells are solids and which are voids, unions overlapping solids, keeps voids at any depth of nesting, and turns inverted bodies the right way out. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
 | **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). |
-| **Usable volume** (U) | The build volume minus twice the margin per axis (minus half a pin in peg mode). |
+| **Usable volume** (U) | The space a piece may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode because pegs stick out of their piece. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |
 | **Void** | An empty space enclosed inside a solid, bounded by an inward-facing shell; repair keeps it. |
