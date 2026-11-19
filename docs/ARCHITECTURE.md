@@ -20,20 +20,20 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 
 | Module | Responsibility | May import | Status |
 |---|---|---|---|
-| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`; the others come with their phase) |
+| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`; the others come with their phase) |
 | `errors` | Exit codes, exception types, diagnostic registry | `models` | ✓ |
 | `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` | ✓ |
 | `geometry` | Thin wrappers around library calls; mesh repair; frames; sections; rays; cylinders | `config`, `models` | ✓ (sections in Phase 4) |
 | `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
 | `connectors` | Connector placement | `geometry` | TODO (Phase 5) |
-| `grid` | Usable volume, auto-orient, even grid, nudging | `geometry`, `connectors` | TODO (Phase 3) |
+| `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` | ✓ (nudging in Phase 6) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry` | TODO (Phase 4) |
 | `labels` | Text outlines and layout on a face | `geometry` | TODO (Phase 8) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` | TODO (Phase 7) |
 | `calibrate` | Calibration kit | `tools`, `labels` | TODO (Phase 7) |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup; writing in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after repair until the next stages exist) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the grid until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -100,9 +100,15 @@ Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
 | Dataclass | Module | Since | Purpose |
 |---|---|---|---|
 | `Diagnostic` | `models` | Phase 1 | A code from the registry, its severity, a message and the IDs it refers to |
+| `Orientation` | `models` | Phase 3 | The chosen rotation's name and the 4×4 input → cutting transform (in `models`, not `grid`, because `assembly` writes it to `assembly.json` in Phase 9) |
+| `Plane` | `models` | Phase 3 | A cut plane: axis, index among its axis' planes, offset (mm, cutting frame) |
+| `Grid` | `models` | Phase 3 | U, cell counts and planes per axis, and the model's extent in the cutting frame |
 
-Planned: `Plane`, `Grid` (Phase 3), `Piece`, `CutFace` (Phase 4), `Connector` (Phase 5),
-`Label` (Phase 8), `AssemblyStep` (Phase 9).
+`grid.Rotation` (a candidate of auto-orient: name and 3×3 integer matrix) stays in `grid`:
+only `grid` uses it.
+
+Planned: `Piece`, `CutFace` (Phase 4), `Connector` (Phase 5), `Label` (Phase 8),
+`AssemblyStep` (Phase 9).
 
 ## Frames
 
@@ -111,6 +117,31 @@ Planned: `Plane`, `Grid` (Phase 3), `Piece`, `CutFace` (Phase 4), `Connector` (P
 | Input | STL coordinates × `--scale` | Loading, repair, original bounding box |
 | Cutting | `x_cut = R · x_in + t`; R a proper rotation (ADR-0008), t moves the bbox minimum to the origin | Everything after orientation, every output file |
 | Plane-local | For a plane of axis a: the axes below; 2D (u, v) = local (x, y) | Cut regions, connectors, labels |
+
+**Input → cutting.** `grid.orient` builds the cutting frame right after repair:
+
+```
+repaired body (input frame)
+  │  grid.choose_rotation   fewest cells over the 6 proper rotations of grid.ROTATIONS
+  │                         (ties: table order; --no-auto-orient: identity)
+  ▼
+grid.to_cutting_frame       transform(R), then translate(−bbox min): bbox min exactly (0, 0, 0)
+  ▼
+body (cutting frame) + Orientation(name, input_to_cutting = [[R, t], [0, 0, 0, 1]])
+  │  grid.even_grid(grid.extent(body), config.derived(cfg).usable)
+  ▼
+Grid (counts, planes, U, extent) + W012 when it already fits
+```
+
+- R is always a signed permutation with det = +1, never a mirror (ADR-0008); the six
+  matrices and their order are in [ALGORITHMS.md](ALGORITHMS.md#auto-orientation).
+- Every stage after `grid.orient`, and every output file, works in the cutting frame. Only the
+  model summary line (bounding box and volume after repair) is in the input frame.
+- The CLI logs `grid: 1 x 1 x 2 = 2 cells; rotation 90 deg about Y`, and the dry run prints the
+  rotation, the matrix, the extent, U, the counts and the plane offsets on **stdout** (logs are
+  on stderr), so `-q` doesn't hide the plan.
+
+Plane-local axes:
 
 | Plane axis | local x (u) | local y (v) | local z (normal) |
 |---|---|---|---|

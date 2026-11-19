@@ -39,3 +39,13 @@ All notable changes to this project are documented here. The format follows
 - Split and dry run log a one-line model summary (triangles, bodies, voids, size, volume,
   repair steps). The input is loaded and repaired before the output directory is touched, so
   a failing input never creates it and `--force` never deletes the previous outputs for it.
+- Auto-orientation (`--auto-orient`, on by default): of the six axis orders, the one that needs
+  the fewest pieces, always as a rotation, never a mirror image; on a tie the model stays as it
+  is when it can. The model then moves so its bounding box starts at the origin; the transform
+  from the input is kept for `assembly.json`.
+- Even grid: each axis is split into the fewest equal cells that fit the usable volume
+  (bed − 2 × margin, minus half a pin with `--connector peg`), so pieces have similar sizes.
+  W012 when the model already fits. The log shows the grid, e.g.
+  `grid: 1 x 1 x 2 = 2 cells; rotation 90 deg about Y`.
+- `--dry-run` prints the orientation, the input-to-cutting matrix, the model's size, the usable
+  volume, the cell counts and the plane positions on standard output.

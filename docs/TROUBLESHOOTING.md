@@ -140,7 +140,11 @@ lies entirely inside another shell and faces the other way. Check that the model
 expected, especially its hollows.
 
 ### W012 — Model already fits (info)
-TODO (Phase 3)
+The model fits the usable volume U in one piece (after auto-orient, if it is on), so there is
+nothing to cut. The message gives U. stlsplit continues with that single piece, without
+connectors or labels, and exits 0. If you expected a split, check `--bed`, `--margin` and
+`--scale`: a model exported in centimetres or inches looks 10 or 25.4 times too small (see also
+W006).
 
 ## Common problems
 

@@ -147,6 +147,24 @@ def manifold_transform_slice_axes() -> None:
         )
 
 
+@check("manifold.signed_permutation_exact")
+def manifold_signed_permutation_exact() -> None:
+    # A quarter turn about Y (cutting (X, Y, Z) = input (+Z, +Y, -X)), then the bbox minimum
+    # moved to the origin, on a box at awkward float coordinates (scaled by 25.4).
+    body = Manifold.cube((460.0, 100.0, 100.0)).translate((-12.345678, 3.3, 0.1)).scale(25.4)
+    low, high = np.array(body.bounding_box()[:3]), np.array(body.bounding_box()[3:])
+    matrix = np.array([[0.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]])
+    rotated = body.transform(matrix)
+    moved = rotated.translate(tuple(-np.array(rotated.bounding_box()[:3])))
+    box = moved.bounding_box()
+    expect(box[:3] == (0.0, 0.0, 0.0), f"bounding box should start exactly at 0, got {box[:3]}")
+    size = high - low
+    expected = (float(size[2]), float(size[1]), float(size[0]))
+    expect(box[3:] == expected, f"extents {box[3:]} should be exactly {expected}")
+    expect(moved.status() == Error.NoError, "a proper rotation should keep the solid valid")
+    expect(moved.volume() == body.volume(), "a signed permutation should keep the volume exactly")
+
+
 @check("manifold.crosssection_evenodd")
 def manifold_crosssection_evenodd() -> None:
     outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
