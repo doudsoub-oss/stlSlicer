@@ -30,11 +30,15 @@ from stlsplit.errors import ConfigError, InputError
 # --- Named constants (PLAN.md §6.1). Not user options: change them here only. ----------------
 
 POLYLABEL_TOLERANCE = 1e-3
-"""Tolerance of the polylabel point used to sort regions, mm (§4.3).
+"""Tolerance of the polylabel point of a region, mm (§4.3).
 
-It only orders regions, so it needs to separate distinct regions, not locate the point
-precisely.
+The point orders regions and tells which piece lies on each side of a cut face (Phase 4,
+task 5). Both only need a point well inside the region, not the exact one.
 """
+
+POLYLABEL_CACHE_SIZE = 1024
+"""Polylabel points remembered by ``geometry.polylabel_point`` (regions are sorted, then matched
+to their pieces, so each is asked for twice)."""
 
 RAY_START_OFFSET = 0.01
 """ε_ray: rays start this far inside a piece, mm, so the face they leave isn't hit (§6.1)."""
@@ -67,6 +71,36 @@ this fraction of U (0.2 nm at U = 210), so a cell fits when ``size ≤ U · (1 +
 evaluated as ``size / U − GRID_TOLERANCE ≤ 1``, the count's own expression (``grid.fits``;
 PLAN.md Appendix E, r6).
 """
+
+MIN_BODY_VOLUME = 1e-6
+"""Bodies of a cell smaller than this, mm³, are float debris of the split and dropped (Phase 4,
+task 4)."""
+
+AREA_TOLERANCE = 1e-6
+"""Areas at or below this, mm², are float noise (Phase 4): a clipped region that small is
+dropped, and two shadows overlapping by no more than this don't overlap (footprint guard)."""
+
+PIECE_PROBE_DEPTH = 0.05
+"""A cut face's pieces are found by their sections this far on each side of the plane, mm
+(Phase 4, task 5)."""
+PIECE_PROBE_DEPTH_RETRY = 0.005
+"""Second, closer probe when the first finds no piece on a side, mm (Phase 4, task 5)."""
+
+VOLUME_TOLERANCE = 1e-3
+"""I3: before tools, the piece volumes add up to the reference volume within this fraction
+(0.1 %, PLAN.md §5.3)."""
+
+CUTTER_PAD = 1.0
+"""Cutter boxes reach this far past the solid's bounding box, mm (Phase 4), so their sides
+never touch a model face."""
+
+MERGE_MARGIN = 0.05
+"""Small-piece merge (ADR-0012): the small piece's shadow is grown by this, mm, before the
+merged piece is cut from the model, so the cut stays clear of the small piece's sides."""
+MERGE_VOLUME_TOLERANCE = 1e-6
+"""Small-piece merge: the merged piece cut from the model must have the volume of the two
+pieces within this fraction; otherwise something else was caught with it and the merge is
+refused (W004)."""
 
 SCALE_WARNING_MIN = 1.0
 """W006 when the model's largest dimension is below this, mm (§4.5): probably not in mm."""

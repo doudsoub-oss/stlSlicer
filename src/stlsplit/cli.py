@@ -8,12 +8,12 @@ directory (§7.6), runs the stages and turns their diagnostics into the exit cod
 Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to stderr; the
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
-Load, repair, orientation and grid run before the output directory is prepared, so an
-unusable input never creates the directory, and ``--force`` never deletes the previous
+Load, repair, orientation, grid and cutting run before the output directory is prepared,
+so an unusable input never creates the directory, and ``--force`` never deletes the previous
 outputs for it.
 
-Phase 3: the stages after the grid don't exist yet, so the split and dry-run modes stop with
-a warning after the grid, and the calibration mode after the checks.
+Phase 4: the stages after the cutting don't exist yet, so the split and dry-run modes stop
+with a warning after it, and the calibration mode after the checks.
 """
 
 import argparse
@@ -31,7 +31,7 @@ from typing import Any, NoReturn
 
 from manifold3d import Manifold
 
-from stlsplit import __version__, config, grid, io, repair
+from stlsplit import __version__, config, cutting, grid, io, repair
 from stlsplit.config import OUTPUT_DECIMALS, Config
 from stlsplit.errors import ConfigError, ExitCode, InputError, StlsplitError, exit_code_for
 from stlsplit.models import Diagnostic, Grid, Orientation
@@ -448,8 +448,16 @@ def _run(ns: argparse.Namespace) -> ExitCode:
             orientation.name,
         )
         exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
+        with stage("cutting"):
+            result = cutting.cut(body, layout, cfg, report.reference_volume)
+        LOGGER.info(
+            "cutting: %s, %s",
+            _plural(len(result.pieces), "piece"),
+            _plural(len(result.faces), "cut face"),
+        )
+        exit_code = max(exit_code, report_diagnostics(result.diagnostics))
         if mode is Mode.DRY_RUN:
-            sys.stdout.write(dry_run_report(orientation, layout))
+            sys.stdout.write(dry_run_report(orientation, layout, result))
     if mode is Mode.DRY_RUN:
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
@@ -457,21 +465,23 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         with stage("output directory"):
             io.prepare_output_dir(ns.output, force="force" in ns)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 4 onwards); stopping here",
+        "the %s mode is not implemented yet (PLAN.md Phase 5 onwards); stopping here",
         mode.value,
     )
     return exit_code
 
 
-def dry_run_report(orientation: Orientation, layout: Grid) -> str:
+def dry_run_report(orientation: Orientation, layout: Grid, result: cutting.Cut) -> str:
     """Return the plan the dry run prints on stdout (PLAN.md §7.1, Phase 3 task 7). ASCII only.
 
-    It grows as phases land; Phase 3 prints the orientation and the grid. Numbers are rounded
-    to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros (§4.1).
+    It grows as phases land: the orientation and the grid (Phase 3), then the pieces and cut
+    faces (Phase 4). Numbers are rounded to ``OUTPUT_DECIMALS`` (6) decimals, without trailing
+    zeros (§4.1).
 
     Args:
         orientation: From ``grid.orient``.
         layout: From ``grid.even_grid``.
+        result: From ``cutting.cut``.
 
     Returns:
         The text, one item per line, ending with a newline.
@@ -488,6 +498,14 @@ def dry_run_report(orientation: Orientation, layout: Grid) -> str:
     for name, planes in zip("XYZ", layout.planes, strict=True):
         offsets = ", ".join(_number(plane.offset) for plane in planes)
         lines.append(f"planes {name}: {offsets or 'none'}")
+    lines.append(f"pieces: {len(result.pieces)}")
+    for piece in result.pieces:
+        merged = f"; merged from {', '.join(piece.merged_from)}" if piece.merged_from else ""
+        lines.append(f"piece {piece.id}: volume {_number(piece.body.volume())} mm^3{merged}")
+    lines.append(f"cut faces: {len(result.faces)}")
+    for face in result.faces:
+        plane = f"{'XYZ'[face.plane.axis]} = {_number(face.plane.offset)}"
+        lines.append(f"face {face.id}: plane {plane}, area {_number(face.region.area)} mm^2")
     return "\n".join(lines) + "\n"
 
 

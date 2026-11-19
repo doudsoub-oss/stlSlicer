@@ -1,12 +1,16 @@
 """Data model shared by every pipeline stage (PLAN.md §5.2).
 
 Dataclasses only, no behaviour. Each dataclass of §5.2 is added by the phase that first uses
-it: Phase 1 adds ``Diagnostic``; Phase 3 adds ``Orientation``, ``Plane`` and ``Grid``;
-``Piece`` and ``CutFace`` come with the cutting (Phase 4), and so on.
+it: Phase 1 adds ``Diagnostic``; Phase 3 adds ``Orientation``, ``Plane`` and ``Grid``; Phase 4
+adds ``Piece`` and ``CutFace``; ``Connector`` comes in Phase 5, ``Label`` (and
+``Piece.label``) in Phase 8, ``AssemblyStep`` in Phase 9.
 """
 
 from dataclasses import dataclass
 from typing import Literal
+
+from manifold3d import Manifold
+from shapely.geometry import Polygon
 
 Axis = Literal[0, 1, 2]
 """Axis index in the cutting frame: 0 = X, 1 = Y, 2 = Z."""
@@ -85,3 +89,48 @@ class Grid:
     counts: tuple[int, int, int]
     planes: tuple[tuple[Plane, ...], tuple[Plane, ...], tuple[Plane, ...]]
     extent: tuple[float, float, float]
+
+
+@dataclass
+class Piece:
+    """One output part: a body of one grid cell, possibly with small pieces merged into it.
+
+    Built by ``cutting.split_cells``; ``cutting.cut_faces`` fills ``face_ids`` and
+    ``cutting.merge_small_pieces`` ``merged_from``. Stages return new pieces rather than
+    changing these lists in place.
+
+    Attributes:
+        id: ``X{i}-Y{j}-Z{k}``, plus ``-a``, ``-b``, … when the cell holds several bodies
+            (PLAN.md §4.3).
+        grid_index: The cell (i, j, k) the piece was cut from; a merged piece keeps its own.
+        body: The solid, mm, cutting frame; valid, with a positive volume (I1).
+        face_ids: IDs of its cut faces, in face order (``cutting.cut_faces``).
+        merged_from: IDs of the small pieces merged into it, in merge order (ADR-0012).
+    """
+
+    id: str
+    grid_index: tuple[int, int, int]
+    body: Manifold
+    face_ids: list[str]
+    merged_from: list[str]
+
+
+@dataclass(frozen=True)
+class CutFace:
+    """The contact between two pieces on one cut plane: one connected region (ADR-0002).
+
+    Attributes:
+        id: ``{piece_neg}~{piece_pos}``, plus ``#2``, ``#3``, … when the same two pieces
+            share several regions, in polylabel order (PLAN.md §4.3).
+        plane: The cut plane.
+        piece_neg: ID of the piece on the local z < offset side.
+        piece_pos: ID of the piece on the local z > offset side.
+        region: The contact, plane-local (u, v), mm; may have holes (I4: inside both
+            pieces' sections).
+    """
+
+    id: str
+    plane: Plane
+    piece_neg: str
+    piece_pos: str
+    region: Polygon

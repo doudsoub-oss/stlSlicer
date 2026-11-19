@@ -49,3 +49,12 @@ All notable changes to this project are documented here. The format follows
   `grid: 1 x 1 x 2 = 2 cells; rotation 90 deg about Y`.
 - `--dry-run` prints the orientation, the input-to-cutting matrix, the model's size, the usable
   volume, the cell counts and the plane positions on standard output.
+- Cutting: the model is split along the grid into pieces with stable IDs (`X1-Y0-Z2`, plus
+  `-a`, `-b`, … for several bodies in one cell), keeping internal voids, and every contact
+  between two pieces becomes a cut face (`X0-Y0-Z0~X1-Y0-Z0`). A model face lying exactly on a
+  cut plane (a step) gives the true contact and clean pieces, with no leftover sheet. The log shows `cutting: 8 pieces, 12 cut
+  faces`; `--dry-run` also lists every piece (volume) and face (plane, area).
+- Small pieces (under `small_piece_volume`, 500 mm³) crossing a plane by a little are merged
+  into the piece they touch when the merged piece still fits and can be put in place with one
+  straight move (W005); otherwise they stay on their own with the reason (W004). Pieces
+  without a cut face are reported (W008).

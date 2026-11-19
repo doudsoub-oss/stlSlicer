@@ -11,10 +11,19 @@ import pytest
 import trimesh
 from manifold3d import Manifold
 
-from stlsplit import __version__, cli, config, errors
+from stlsplit import __version__, cli, config, cutting, errors, grid
 from stlsplit.config import Config
 from stlsplit.errors import ExitCode
-from tests.conftest import capless_sphere, cube, long_box, missing_face_cube, two_bodies
+from stlsplit.models import Grid, Plane
+from tests.conftest import (
+    KNOB_PLANES,
+    capless_sphere,
+    cube,
+    knob,
+    long_box,
+    missing_face_cube,
+    two_bodies,
+)
 from tests.unit.test_config import EXAMPLE_TOML
 
 WriteStl = Callable[[Manifold | trimesh.Trimesh, str], Path]
@@ -373,6 +382,42 @@ def test_dry_run_prints_the_grid_on_stdout(
     assert "planes X: 166.666667, 333.333333" in lines
     assert "planes Y: none" in lines
     assert "planes Z: none" in lines
+
+
+def test_dry_run_prints_the_pieces_and_cut_faces(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    argv = [str(stl), "--dry-run", "--bed", "220", "220", "220"]
+    assert cli.main(argv) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "pieces: 3" in lines
+    assert "piece X0-Y0-Z0: volume 1666666.666667 mm^3" in lines
+    assert "piece X2-Y0-Z0: volume 1666666.666667 mm^3" in lines
+    assert "cut faces: 2" in lines
+    assert "face X0-Y0-Z0~X1-Y0-Z0: plane X = 166.666667, area 10000 mm^2" in lines
+    assert "face X1-Y0-Z0~X2-Y0-Z0: plane X = 333.333333, area 10000 mm^2" in lines
+    assert "cutting: 3 pieces, 2 cut faces" in captured.err
+
+
+def test_dry_run_report_lists_the_pieces_a_piece_absorbed() -> None:
+    body = knob()
+    planes = tuple(
+        tuple(Plane(axis=axis, index=i, offset=o) for i, o in enumerate(offsets))  # type: ignore[arg-type]
+        for axis, offsets in enumerate(KNOB_PLANES)
+    )
+    layout = Grid(
+        usable=(110.0, 110.0, 210.0),
+        counts=(2, 2, 1),
+        planes=planes,  # type: ignore[arg-type]
+        extent=grid.extent(body),
+    )
+    result = cutting.cut(body, layout, Config(), body.volume())
+    _, orientation = grid.to_cutting_frame(body, grid.ROTATIONS[0])
+    lines = cli.dry_run_report(orientation, layout, result).splitlines()
+    assert "piece X0-Y0-Z0: volume 950360 mm^3; merged from X1-Y0-Z0" in lines
+    assert "cut faces: 1" in lines
 
 
 def test_dry_run_prints_the_rotation_and_translation(

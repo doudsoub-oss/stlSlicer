@@ -146,7 +146,7 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | `advanced.section_epsilon` | `0.01` | mm | Half-thickness of the section probe (ADR-0002) | > 0 and ≤ 0.1 |
 | `advanced.nudge_window` | `5.0` | mm | How far a cut plane may be moved to a better position (0 disables nudging) | ≥ 0 |
 | `advanced.nudge_step` | `0.5` | mm | Step of the nudge search | > 0 |
-| `advanced.small_piece_volume` | `500.0` | mm³ | Pieces smaller than this are merged into a neighbour (0 disables merging) | ≥ 0 |
+| `advanced.small_piece_volume` | `500.0` | mm³ | Pieces smaller than this are merged into the piece they touch when that is safe (W005; otherwise W004; [details](ALGORITHMS.md#small-piece-merge)); 0 disables merging | ≥ 0 |
 | `advanced.label_font` | `"DejaVuSans-Bold.ttf"` | — | Label font: a font bundled with matplotlib (bare file name) or an absolute path | Must resolve to an existing file |
 | `advanced.label_min_height` | `4.0` | mm | Smallest label text height | > 0 and ≤ `label_max_height` |
 | `advanced.label_max_height` | `12.0` | mm | Largest label text height | ≥ `label_min_height` |
