@@ -79,6 +79,11 @@ compared to the available depth, and when the gap between two holes is compared 
 ``min_gap`` gives 1.999999999999993 for two holes exactly 2 mm apart (docs/LIBRARY_NOTES.md).
 """
 
+STEP_COUNT_TOLERANCE = 1e-9
+"""Slack when counting the nudge steps in the window, dimensionless (Phase 6):
+``floor(W_n / δ_n + this)``, because 0.3 / 0.1 is 2.9999999999999996 in floats. The limit
+``MAX_NUDGE_STEPS`` is checked with the same slack: 0.9 / 0.009 is 100.00000000000001."""
+
 OUTPUT_DECIMALS = 6
 """Floats in JSON, Markdown and the dry-run plan are rounded to this many decimals (§4.1)."""
 
@@ -149,6 +154,11 @@ resolution; more segments only multiply the triangles of every hole (PLAN.md App
 MIN_PIN_LENGTH_STEP = 0.1
 """mm. Bounds the number of standard pin lengths, (L_max − L_min) / Δ + 1 (PLAN.md Appendix E,
 r4): a tiny step made ``derived()`` build millions of lengths."""
+MAX_NUDGE_STEPS = 100
+"""Steps a plane may be nudged on each side at most: ``nudge_window / nudge_step`` ≤ this
+(PLAN.md Appendix E, r9). Each step is a position to score, two slices of the whole body
+(about 35 ms at 1M triangles), and a tiny ``nudge_step`` made nudging build millions of
+positions, or overflow (exit 4)."""
 MAX_SECTION_EPSILON = 0.1
 MAX_CALIBRATION_CLEARANCES = 10
 PIN_FLAT_DIVISOR = 4
@@ -556,6 +566,14 @@ def validate(cfg: Config) -> None:
     _check(adv.nudge_window >= 0, "advanced.nudge_window", "must be >= 0", adv.nudge_window)
     _check(adv.nudge_step > 0, "advanced.nudge_step", "must be > 0", adv.nudge_step)
     _check(
+        _nudge_ratio(cfg) <= MAX_NUDGE_STEPS + STEP_COUNT_TOLERANCE,
+        "advanced.nudge_step",
+        f"must be >= advanced.nudge_window / {MAX_NUDGE_STEPS} = "
+        f"{_show(adv.nudge_window / MAX_NUDGE_STEPS)} (at most {MAX_NUDGE_STEPS} nudge steps "
+        "on each side of a plane)",
+        adv.nudge_step,
+    )
+    _check(
         adv.small_piece_volume >= 0,
         "advanced.small_piece_volume",
         "must be >= 0",
@@ -637,6 +655,9 @@ class Derived:
         connector_spacing: s_min = ``connector_spacing_factor`` · d, mm.
         area_per_connector: A = (``connector_area_factor`` · d)², mm².
         island_area: ``ISLAND_AREA_FACTOR`` · π · (d/2)², mm².
+        nudge_steps: How many steps of δ_n a plane may be nudged on each side,
+            ``floor(W_n / δ_n + STEP_COUNT_TOLERANCE)``; at most ``MAX_NUDGE_STEPS``, and 0
+            when nudging is off.
         label_keep_out: r_h + ch_h + w, mm: label keep-out radius around a connector.
         probe_radius: r_h + w, mm: radius of the circle of depth rays and of the containment
             cylinder around a connector's axis (Phase 5).
@@ -656,6 +677,7 @@ class Derived:
     connector_spacing: float
     area_per_connector: float
     island_area: float
+    nudge_steps: int
     label_keep_out: float
     probe_radius: float
     ray_length: float
@@ -696,6 +718,9 @@ def derived(cfg: Config) -> Derived:
         (ux - protrusion, uy - protrusion, uz - protrusion) if c.type == "peg" else (ux, uy, uz)
     )
     hole_radius = c.diameter / 2 + c.clearance
+    nudge_ratio = _nudge_ratio(cfg)
+    if not nudge_ratio <= MAX_NUDGE_STEPS + STEP_COUNT_TOLERANCE:  # also catches inf
+        raise ValueError("advanced.nudge_step is out of range; validate the config first")
 
     clearances = adv.calibration_clearances
     if not clearances:
@@ -728,6 +753,7 @@ def derived(cfg: Config) -> Derived:
         connector_spacing=adv.connector_spacing_factor * c.diameter,
         area_per_connector=(adv.connector_area_factor * c.diameter) ** 2,
         island_area=ISLAND_AREA_FACTOR * math.pi * (c.diameter / 2) ** 2,
+        nudge_steps=math.floor(nudge_ratio + STEP_COUNT_TOLERANCE),
         label_keep_out=hole_radius + adv.hole_chamfer + c.min_wall,
         probe_radius=hole_radius + c.min_wall,
         ray_length=hole_depth(cfg, c.length) + c.min_wall + RAY_LENGTH_MARGIN,
@@ -859,6 +885,12 @@ def _check_finite(cfg: Config) -> None:
         numbers = value if isinstance(value, tuple) else (value,)
         if any(isinstance(v, float) and not math.isfinite(v) for v in numbers):
             raise ConfigError(key, f"must be a finite number, got {_show(value)}")
+
+
+def _nudge_ratio(cfg: Config) -> float:
+    """W_n / δ_n: inf when a tiny step overflows, so compare it, never floor it unchecked."""
+    adv = cfg.advanced
+    return adv.nudge_window / adv.nudge_step if adv.nudge_step > 0 else math.inf
 
 
 def _pin_min_length(cfg: Config) -> float:

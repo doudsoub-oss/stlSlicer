@@ -24,7 +24,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Island** | A tiny region of a cut face (area below 4·π·(d/2)²), penalised when nudging planes. |
 | **Margin** (m) | Space kept free on each side of every axis of the build volume. |
 | **Neg / pos piece** | The piece on the local z < offset side / z > offset side of a cut face. |
-| **Nudging** | Moving a cut plane a little from its even-grid position to get better cut faces. |
+| **Nudging** | Moving a cut plane a little from its even-grid position to get better cut faces: fewer faces without room for a connector, then fewer islands. |
 | **Peg** | A connector printed as part of one piece, sticking out into a hole of the other. |
 | **Piece** | One output part: a body in a cell, ID `X{i}-Y{j}-Z{k}` plus `-a`, `-b` for several bodies. A piece may have absorbed small pieces of neighbouring cells (`merged_from`). |
 | **Plane-local frame** | Coordinates attached to a cut plane: (u, v) on the plane, z along its normal. |
@@ -35,6 +35,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Section** | Where a plane cuts the model or a piece: polygons in the plane's (u, v). A single section is one-sided when a model face lies on the plane, so cut faces use two sections at ± ε. |
 | **Shell** | One closed, connected surface of a mesh. A solid with a void has two shells: the outer one and the void's. |
 | **Shell normalization** | Repair step that decides from containment and orientation which shells are solids and which are voids, unions overlapping solids, keeps voids at any depth of nesting, and turns inverted bodies the right way out. |
+| **Slack** (of a plane) | How far a cut plane can move on each side while it stays between its neighbours and both cells it bounds still fit the usable volume. Nudging stays within it. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
 | **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). A connector takes the longest one whose holes fit the material behind the face on both sides; shorter than L_max gives W002. |
 | **Usable volume** (U) | The space a piece may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode because pegs stick out of their piece. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |

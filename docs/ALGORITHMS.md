@@ -174,7 +174,7 @@ already fits.
 - **One cell on every axis:** W012 (info), "nothing to cut". The pipeline continues with one
   piece, without faces, connectors or labels, and exits 0.
 
-Nudging (Phase 6) then moves planes within ± `nudge_window`, keeping every cell inside U.
+Nudging (below) then moves planes within ± `nudge_window`, keeping every cell inside U.
 
 Code: `grid.even_grid`, `grid.cell_count`. Tests: `tests/unit/test_grid.py` (the long box,
 the tolerance cases, peg mode, W012, and the hypothesis properties
@@ -412,7 +412,99 @@ the 2 × 2 × 2 cube, 15 mm pieces, pegs, `--connector none`), `tests/unit/test_
 (holes).
 
 ## Plane nudging
-TODO (Phase 6)
+
+Moves each plane of the even grid a little, so that it avoids thin features and faces with no
+room for a connector, without breaking the bed fit and without moving planes for no gain
+(ADR-0003). Input: the normalized body (cutting frame), the even `Grid` and the configuration.
+Output: the same grid with some plane offsets changed (indices, U, counts and extent are
+unchanged). Code: `grid.nudge` and the functions below; W_n = `advanced.nudge_window` (5 mm),
+δ_n = `advanced.nudge_step` (0.5 mm).
+
+**1. Order.** Planes are taken one after the other: X planes, then Y, then Z, each axis by
+increasing offset. Each plane is scored on the grid as the planes before it left it, so a
+move changes the room the next planes have (task 3). A plane is never revisited.
+
+**2. Candidate moves** (`candidate_shifts`). δ = j · δ_n for whole numbers j (so the steps
+don't add up rounding errors) with |j| ≤ N, the window counted in steps:
+N = floor(W_n / δ_n + 1e-9) (`derived(cfg).nudge_steps`, 10 by default). The slack
+`STEP_COUNT_TOLERANCE` is there because 0.3 / 0.1 is 2.9999999999999996 in floats.
+Validation keeps N ≤ 100 (`MAX_NUDGE_STEPS`; W_n / δ_n over 100 exits 1, PLAN.md Appendix E,
+r9), so a plane has at most 201 positions: a tiny `nudge_step` made the search build millions
+of them, or overflow. A move is kept when:
+
+- the plane stays strictly between its neighbours (the previous and next planes, or 0 and
+  the extent; r9);
+- both cells it bounds still fit U, by `grid.fits`, the count's own arithmetic.
+
+These two are the plane's **slack**, side by side, so the window is min(W_n, slack) on each
+side. Three cells of 238 mm on U = 240 leave each plane 2 mm either way; once the first plane
+has moved 1.5 mm up, the middle cell is 236.5 mm and the second plane may move up to 3.5 mm
+up. With N = 0 (W_n = 0, or a window under one step) nudging does nothing; with a slack
+under one step, the plane stays without being scored.
+
+**3. Score** of a position (`plane_regions`, `score_regions`): the plane's contact region
+(`geometry.cut_region`, ADR-0002), clipped to every pair of cells across it
+(`geometry.clip_to_cells`, the pairs from `grid.cell_pairs`, as the cutting does), then a tuple
+compared lexicographically, lower is better:
+
+1. the number of regions whose safe region (`connectors.safe_region`, inset 5.1 mm) is empty;
+2. the number of tiny islands: regions under 4 · π · (d/2)² (78.5 mm² at d = 5);
+3. |δ|;
+4. δ.
+
+The last two keep a plane where it is when moving gains nothing, and make the choice unique,
+so it doesn't depend on the order in which the moves are generated. With the defaults a tiny
+island never has room (a disc of radius 5.1 is already 81.7 mm²), so the second key only
+matters as a tie-break between positions with the same number of faces without room, or with
+a large d (at d = 10 a 9 mm disc has room and is still an island).
+
+**4. Choice** (`choose_shift`). Moves are scored from the smallest |δ| outwards, −δ before
++δ, and scoring stops at the first position that scores (0, 0): nothing after it can beat it.
+The result is the one scoring every move would give, and most planes of a solid model cost a
+single score (δ = 0).
+
+**5. Check.** After the last plane, every cell must fit U and the bounds must increase
+strictly (`grid.check_fits`, the check `even_grid` runs too); otherwise `AssertionError`, a bug
+(exit 4).
+
+**No coplanar-vertex rule** (task 5). manifold3d splits through mesh vertices, and
+`cut_region` gives the true contact when a model face lies on the plane, so planes never need
+to keep away from either. An earlier rule ("no vertex within 0.01 mm of the plane") never
+terminates on a dense mesh: a 1M-triangle model has dozens of vertices within any such band.
+
+Example: `tall_figure` is two 60 × 60 boxes joined by a 6 × 6 neck from z = 148 to 153, 300 mm
+tall. The default bed (U_z = 240) puts the even plane at z = 150, in the neck: one region of
+36 mm², no room and a tiny island, score (1, 1). The moves are tried in the order 0, −0.5,
++0.5, −1, … At z = 148 the contact is still the neck (the slices at 147.99 and 148.01
+intersect in the neck). z = 147.5 (δ = −2.5) cuts the lower box, a 60 × 60 face scoring
+(0, 0), and wins over z = 153.5 (δ = +3.5). A neck from 140 to 160 fills the whole window:
+every position scores (1, 1), and the plane stays at 150.
+
+Edge cases and limits:
+
+- A plane in a gap between bodies cuts nothing: it scores (0, 0) where it is, and stays.
+- **The score is 2D.** It sees the face, not the material behind it. Moved just off a neck,
+  the plane leaves a thin slab of the box under the neck (0.5 mm for `tall_figure`), so the
+  holes on that side have no depth and the face still gets W001 from the 3D checks. The face
+  is still the full 3600 mm² section, glued, instead of the 36 mm² neck.
+- **One plane at a time.** A plane is scored with the planes of the axes after it still at
+  their even positions, and isn't revisited when they move (ADR-0003, "Consequences").
+- **Cost.** Each position scored is two slices of the whole body. The polygons are not
+  sorted by polylabel point (`ordered=False`): a score only counts them, and polylabel took
+  97 % of the time on the hollow sphere (4.9 s for its 3 planes, 0.11 s without). Worst case
+  measured: a 1M-triangle hollow sphere, whose faces never have room, so all 21 positions of
+  its 3 planes are scored: 2.1 s. At the limit of 100 steps, a plane can cost 201 scores,
+  about 7 s at 1M triangles.
+
+Tests: `tests/unit/test_nudge.py` (the 500 mm box keeps 500/3 and 1000/3 exactly, the fit
+check, candidate moves and slack, the window tolerance, the score, ties, the hypothesis
+properties
+`test_every_candidate_shift_keeps_both_cells_within_u` and
+`test_choice_does_not_depend_on_candidate_order`), `tests/integration/test_nudge.py` (the
+tall figure, a neck longer than the window, a gap between bodies, W_n = 0, the slack left by
+the plane before,
+the hypothesis property `test_every_cell_fits_u_after_nudging`), `tests/unit/test_cli.py`
+(the dry run prints the nudged planes).
 
 ## Tool solids, pins and the calibration kit
 TODO (Phase 7)

@@ -10,7 +10,7 @@ reversed winding, unmerged) can't be a valid ``Manifold``, so they are built as
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -295,6 +295,44 @@ def box_with_bubble() -> Manifold:
     """A 300 × 100 × 100 box with a sphere r = 20 void centred at x = 50 (away from x = 150)."""
     bubble = Manifold.sphere(20.0, 32).translate((50.0, 50.0, 50.0))
     return Manifold.cube((300.0, 100.0, 100.0)) - bubble
+
+
+TALL_FIGURE_WIDTH = 60.0
+"""Side of the square boxes of ``tall_figure``, mm."""
+
+TALL_FIGURE_NECK = 6.0
+"""Side of the square necks of ``tall_figure``, mm: 36 mm², a tiny island (under 78.5 mm²)
+with no room for a connector."""
+
+
+def tall_figure(
+    height: float = 300.0, necks: Sequence[tuple[float, float]] = ((148.0, 153.0),)
+) -> Manifold:
+    """Square boxes stacked along Z, joined by thin square necks (the nudging tests).
+
+    The boxes are ``TALL_FIGURE_WIDTH`` wide and the necks ``TALL_FIGURE_NECK``, centred on
+    them, with the minimum corner at the origin. Each neck spans the given (bottom, top) along
+    Z, and a box fills the space between two necks. By default the figure is 300 mm tall, so the
+    default bed (U_z = 240) cuts it once, at z = 150, through the neck from 148 to 153.
+
+    Args:
+        height: Total height, mm.
+        necks: (bottom, top) of each neck, mm, increasing and inside (0, height).
+    """
+    side, neck = TALL_FIGURE_WIDTH, TALL_FIGURE_NECK
+    tops = [0.0, *(top for _, top in necks)]
+    bottoms = [*(bottom for bottom, _ in necks), height]
+    parts = [
+        Manifold.cube((side, side, high - low)).translate((0.0, 0.0, low))
+        for low, high in zip(tops, bottoms, strict=True)
+    ]
+    # Each neck reaches 1 mm into its boxes, so the union never joins faces that only touch.
+    corner = (side - neck) / 2
+    parts += [
+        Manifold.cube((neck, neck, top - bottom + 2.0)).translate((corner, corner, bottom - 1.0))
+        for bottom, top in necks
+    ]
+    return Manifold.batch_boolean(parts, OpType.Add)
 
 
 # --- Meshes that need normalization or repair ---------------------------------------------------

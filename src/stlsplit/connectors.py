@@ -3,8 +3,8 @@
 Fifth stage of the pipeline (PLAN.md §5.1), after the cutting (``cutting.cut``) and before the
 labels (Phase 8). ``place`` takes the pieces and their cut faces (cutting frame, mm) and
 returns the connectors with the diagnostics W001 (a face without connector), W002 (pins
-shortened) and W009 (a single connector). ``safe_region`` is also what plane nudging (Phase 6)
-scores faces with.
+shortened) and W009 (a single connector). ``safe_region`` is also what plane nudging
+(``grid.nudge``) scores cut regions with.
 
 For each face, in face order (docs/ALGORITHMS.md, "Connector placement"):
 

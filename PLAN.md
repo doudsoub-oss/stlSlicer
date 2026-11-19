@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r8** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r9** (2026-11-19); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -639,7 +639,8 @@ the key.
 - Advanced: `axial_play` ≥ 0; `pin_length_step` ≥ 0.1; `pin_min_length_factor` > 0;
   0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4; 0 ≤ `hole_chamfer` ≤ w/2;
   16 ≤ `circular_segments` ≤ 256; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
-  `nudge_window` ≥ 0; `nudge_step` > 0; 0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
+  `nudge_window` ≥ 0; `nudge_step` > 0 and `nudge_window / nudge_step` ≤ 100 (r9);
+  0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
   0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
   ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
 - Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config` (`--print-config` with
@@ -900,7 +901,7 @@ independent reviewer check the result.
 pip install -e ".[dev]"                     # development environment
 python scripts/check.py                     # ruff, ruff format --check, mypy, all tests except slow
 python scripts/check.py --fast              # same, without the e2e tests
-pytest -q tests/unit/test_grid.py -k nudge  # one test
+pytest -q tests/unit/test_nudge.py -k slack # one test
 python scripts/api_spike.py                 # after any dependency upgrade
 ```
 
@@ -1414,7 +1415,8 @@ a connector, without breaking the bed fit and without moving planes for no gain.
 
 **Tasks.**
 1. For each plane, in axis order X, Y, Z and then by increasing offset:
-   - Its slack is how far it can move while both neighbouring cells still fit U.
+   - Its slack is how far it can move while both neighbouring cells still fit U and it stays
+     strictly between its neighbouring planes (or 0 and the extent; r9).
    - window = min(W_n, slack).
    - Candidate shifts: δ ∈ {0, ±δ_n, ±2δ_n, …} within the window.
 2. Score each candidate with a tuple compared lexicographically (lower is better). The cut regions
@@ -1836,7 +1838,7 @@ CLI that splits an oversized STL into printable, connectable parts. Python ≥ 3
 - Dev install: `pip install -e ".[dev]"`
 - All checks (run before every commit): `python scripts/check.py`
 - Without e2e tests: `python scripts/check.py --fast`
-- One test: `pytest -q tests/unit/test_grid.py -k nudge`
+- One test: `pytest -q tests/unit/test_nudge.py -k slack`
 - After a dependency upgrade: `python scripts/api_spike.py`
 
 ## Where to look
@@ -1901,7 +1903,7 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `duplicated_cube(inside_out)` | The same cube twice | Identical shells merged, W010 (r5) |
 | `flat_sheet` | A square, its two triangles facing both ways | Closed but no volume, exit 2 (r5) |
 | `dense_sphere` | `Manifold.sphere(20, 256)` | `--simplify` |
-| `tall_figure` | Stacked boxes with a thin neck | Nudging |
+| `tall_figure(height, necks)` | 60 × 60 boxes stacked along Z, joined by 6 × 6 necks; by default 300 mm tall with one neck from z = 148 to 153 (r9) | Nudging |
 | `plinth_step` | 10 × 10 × 20 box on a 40 × 40 × 10 plinth | Contact region at a step |
 | `overhang_step` | 40 × 40 × 10 plate on a 10 × 10 × 10 column | Contact region, other step direction |
 | `knob` | Box with a small knob crossing a plane | Small-piece merge |
@@ -1911,6 +1913,34 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r9 — 2026-11-19 (Phase 6).** Found while planning and implementing Phase 6, agreed with the
+maintainer:
+
+- **A plane stays strictly between its neighbours** (task 1). The slack was defined only by
+  both neighbouring cells fitting U; with a large `nudge_window` a plane could then pass its
+  neighbour, since a cell of negative size passes the fit check. `grid.check_fits` now also
+  asserts that the bounds increase strictly.
+- **Shared cell pairs**: `grid.cell_pairs` lists the cell pairs across a plane for both
+  nudging and `cutting.cut_faces`, so the regions nudging scores are clipped exactly as the
+  cut faces are.
+- **No polylabel sort when scoring**: `geometry.cut_region` and `geometry.clip_to_cells` take
+  `ordered=False`. A score only counts regions, and the sort took 97 % of the nudging time on
+  the hollow sphere (4.9 s for 3 planes, 0.11 s without).
+- **Scoring stops early**: moves are scored from the smallest |δ| outwards and scoring stops
+  at the first (0, 0). The result is the one scoring every move would give.
+- **The 2D score has a limit** (recorded, not changed): a plane moved just off a neck leaves
+  a thin slab on the neck side, so the face can still get W001 from the 3D checks
+  (`tall_figure`: 0.5 mm of the lower box stays with the neck). ADR-0003, "Consequences".
+- **`nudge_window / nudge_step` ≤ 100** (§7.5), found by the review: `nudge_step` was only
+  checked > 0, so 5e-324 overflowed (exit 4) and 1e-9 ran out of memory. The window is now
+  counted in steps, `floor(W_n / δ_n + 1e-9)` (`derived(cfg).nudge_steps`), and validation
+  uses the same expression, so a plane has at most 201 positions (`MAX_NUDGE_STEPS`). The
+  absolute `|δ| ≤ W_n + 1e-9 mm` it replaces would have let a sub-nanometre window hold
+  10⁵ steps of 1e-14 mm.
+- **Example test command**: `pytest -q tests/unit/test_nudge.py -k slack` replaces
+  `tests/unit/test_grid.py -k nudge`, which selects nothing now that the nudging tests have
+  their own file (§9.6, Appendix B, CLAUDE.md, CONTRIBUTING.md).
 
 **r8 — 2026-11-19 (Phase 5).** Found while planning and implementing Phase 5, agreed with the
 maintainer:

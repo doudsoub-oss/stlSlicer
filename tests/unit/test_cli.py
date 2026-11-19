@@ -22,6 +22,7 @@ from tests.conftest import (
     knob,
     long_box,
     missing_face_cube,
+    tall_figure,
     two_bodies,
 )
 from tests.unit.test_config import EXAMPLE_TOML
@@ -498,6 +499,30 @@ def test_split_logs_the_grid_and_prints_no_plan(
     captured = capsys.readouterr()
     assert "grid: 3 x 1 x 1 = 3 cells; rotation identity" in captured.err
     assert captured.out == ""
+
+
+# --- plane nudging (PLAN.md Phase 6) ---------------------------------------------------------
+
+
+def test_dry_run_prints_the_nudged_planes(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(tall_figure(), "figure")
+    cli.main([str(stl), "--dry-run"])
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    # The even plane z = 150 cuts the 6 x 6 neck; the cutting stage gets the nudged one.
+    assert "planes Z: 147.5" in lines
+    assert "face X0-Y0-Z0~X0-Y0-Z1: plane Z = 147.5, area 3600 mm^2" in lines
+    assert "nudging: 1 of 1 plane moved (Z 150 -> 147.5)" in captured.err
+
+
+def test_dry_run_logs_that_no_plane_moved(
+    write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(long_box(), "model")
+    assert cli.main([str(stl), "--dry-run", "--bed", "220", "220", "220"]) == ExitCode.SUCCESS
+    assert "nudging: 0 of 2 planes moved" in capsys.readouterr().err
 
 
 # --- --print-config --------------------------------------------------------------------------

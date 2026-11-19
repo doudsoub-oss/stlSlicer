@@ -144,8 +144,8 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | `advanced.connector_spacing_factor` | `3.0` | — | Minimum distance between connectors of one face = factor × d | > 0 |
 | `advanced.connector_area_factor` | `6.0` | — | Face area per connector = (factor × d)² | > 0 |
 | `advanced.section_epsilon` | `0.01` | mm | Half-thickness of the section probe (ADR-0002) | > 0 and ≤ 0.1 |
-| `advanced.nudge_window` | `5.0` | mm | How far a cut plane may be moved to a better position (0 disables nudging) | ≥ 0 |
-| `advanced.nudge_step` | `0.5` | mm | Step of the nudge search | > 0 |
+| `advanced.nudge_window` | `5.0` | mm | How far a cut plane may be moved to a better position: fewer faces without room for a connector, then fewer tiny regions ([details](ALGORITHMS.md#plane-nudging)); never further than every piece still fitting the usable volume allows; 0 disables nudging | ≥ 0 |
+| `advanced.nudge_step` | `0.5` | mm | Step of the nudge search: planes move by whole multiples of it, at most 100 on each side | > 0 and ≥ `nudge_window` / 100 |
 | `advanced.small_piece_volume` | `500.0` | mm³ | Pieces smaller than this are merged into the piece they touch when that is safe (W005; otherwise W004; [details](ALGORITHMS.md#small-piece-merge)); 0 disables merging | ≥ 0 |
 | `advanced.label_font` | `"DejaVuSans-Bold.ttf"` | — | Label font: a font bundled with matplotlib (bare file name) or an absolute path | Must resolve to an existing file |
 | `advanced.label_min_height` | `4.0` | mm | Smallest label text height | > 0 and ≤ `label_max_height` |
