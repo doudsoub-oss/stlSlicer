@@ -772,20 +772,22 @@ def test_unexpected_exception_exits_4_and_asks_for_a_report(
 def test_default_logging_shows_info(
     write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert cli.main([str(write_stl(cube(), "model")), "--dry-run"]) == ExitCode.SUCCESS
+    stl = write_stl(cube(), "model")
+    assert cli.main([str(stl), "--dry-run", "--scale", "0.05"]) == ExitCode.SUCCESS
     err = capsys.readouterr().err
     assert "configuration: built-in defaults" in err
-    assert "warning: " in err  # the dry run isn't implemented yet
+    assert "warning: W006" in err  # a 0.5 mm model
     assert "stage " not in err
 
 
 def test_quiet_hides_info_but_keeps_warnings(
     write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert cli.main([str(write_stl(cube(), "model")), "--dry-run", "-q"]) == ExitCode.SUCCESS
+    stl = write_stl(cube(), "model")
+    assert cli.main([str(stl), "--dry-run", "--scale", "0.05", "-q"]) == ExitCode.SUCCESS
     err = capsys.readouterr().err
     assert "configuration:" not in err
-    assert "warning: " in err
+    assert "warning: W006" in err  # a 0.5 mm model
 
 
 def test_verbose_shows_stage_timings(

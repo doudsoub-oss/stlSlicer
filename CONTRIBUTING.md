@@ -116,7 +116,16 @@ python scripts/api_spike.py                 # after any dependency upgrade
 TODO (Phase 2)
 
 ### Change an output file or the `assembly.json` schema
-TODO (Phase 9)
+1. A new top-level name in the output folder goes in `io.OWNED_OUTPUTS`, the only names the
+   writers accept and `--force` deletes.
+2. Change the content in `assembly.build_document`, and `assembly.to_markdown` if people read
+   it. Keep it deterministic: no timestamps or absolute paths, floats rounded (ADR-0010).
+3. Update `src/stlsplit/schemas/assembly.schema.json`. Adding a field keeps `schema_version`;
+   removing, renaming or changing the meaning of one increments `ASSEMBLY_SCHEMA_VERSION` in
+   `config.py` and the schema's `const`. Ask the maintainer first (PLAN.md §9.2).
+4. Docs: `docs/OUTPUT_FORMAT.md` (fields and `schema_version` history; a drift test checks the
+   top-level names), the README if users see it, and a CHANGELOG entry.
+5. Test it in `tests/integration/test_export.py`, including the byte-identical run.
 
 ### Upgrade a dependency
 1. Upgrade in a fresh virtual environment: `pip install --upgrade <package>`.

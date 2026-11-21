@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r11** (2026-11-21); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r12** (2026-11-21); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -239,7 +239,7 @@ stlsplit/
 | `labels` | Text outlines and layout on a face | `geometry`, `connectors` (`hole_solids`; r11) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (`hole_solids`), `grid` (`fits`) (r10) |
 | `calibrate` | Calibration kit | `tools`, `labels` |
-| `assembly` | Assembly order; JSON and Markdown content; preview scene | `models`, `config` |
+| `assembly` | Assembly order; JSON and Markdown content; preview layout | `models`, `config`, `errors`, `geometry` (r12) |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` |
 | `cli` | Argument parsing, orchestration, logging, exit codes | everything |
 
@@ -334,6 +334,7 @@ retired.
 | W010 | info | Overlapping shells were merged. |
 | W011 | warning | An inside-out body was flipped. |
 | W012 | info | The model already fits: nothing to cut. |
+| W013 | partial | No clear straight path could be shown for an assembly step (r12). |
 
 ---
 
@@ -441,6 +442,7 @@ class AssemblyStep:
     direction: str                            # e.g. "-y"
     face_ids: tuple[str, ...]
     connector_count: int
+    clear_path: bool = True                   # r12: False = no clear path shown (W013)
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -462,7 +464,7 @@ Asserted in code where cheap, tested everywhere else.
 | I4 | Every cut face has exactly one piece on each side, and its region lies inside both pieces' sections. |
 | I5 | No two holes in the same piece are closer than `min_wall` (measured with `min_gap`). |
 | I6 | Every connector's axis point lies inside its face's safe region. |
-| I7 | Every assembly step joins two different sub-assemblies, and all its faces are perpendicular to its axis. |
+| I7 | Every assembly step joins two different sub-assemblies with one straight move (r12), and all its faces are perpendicular to its axis. |
 
 ---
 
@@ -516,6 +518,8 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 | H_min, H_max | Label text height range | `advanced.label_min_height`, `advanced.label_max_height` | 4.0, 12.0 |
 | V_small | Small-piece volume threshold | `advanced.small_piece_volume` | 500 mm³ |
 | W_n, δ_n | Nudge window and step | `advanced.nudge_window`, `advanced.nudge_step` | 5.0, 0.5 |
+| path slack | Slack when comparing positions along an assembly move (r12) | constant `ASSEMBLY_PATH_TOLERANCE` | 1e-6 |
+| order search | States the search for a fully clear join order may visit per cluster (r12) | constant `ASSEMBLY_SEARCH_STATES` | 4096 |
 
 ### 6.2 Pin lengths, hole depths and why they're defined this way
 
@@ -568,7 +572,8 @@ engraving that would reach a hole, and holes that would touch (r10).
 | Calibration | `stlsplit --calibrate -o DIR [connector options]` | yes | 0, 1 or 4 |
 | Show config | `stlsplit --print-config [--config FILE] [options]` | no | 0 or 1 |
 
-The dry run goes through every step up to connector placement and label layout, skipping the
+The dry run goes through every step up to connector placement and label layout, then plans the
+assembly order so that it reports W013 and exits as a split would (r12), skipping the tool
 booleans and file writing. It prints the orientation, grid, planes, pieces, faces, connectors, pin
 groups and diagnostics. Its output grows as phases land (Phase 3 prints the grid only). The plan
 goes to stdout and the log, diagnostics included, to stderr, so `-q` doesn't hide the plan (r6).
@@ -1599,12 +1604,16 @@ never touching a connector.
 
 **Tasks.**
 1. **Assembly order** (ADR-0004). Three stages: X joins, then Y joins, then Z joins.
-   - **Within a stage:** go through that axis' cut faces in a fixed order. Join the two current
-     sub-assemblies a face connects (union-find). Each join covers *all* faces of that axis between
-     the two sub-assemblies.
-   - **Motion:** the larger sub-assembly stays still and the other slides along ±axis.
-   - **Why this works:** every join is one straight motion parallel to all its pins, and the two
-     sides of a plane can always be pulled apart along its normal.
+   - **Within a stage (r12):** take that axis' planes in increasing order. On one plane, take the
+     sub-assemblies its faces connect apart one at a time, each leaving the others connected and
+     having a clear path away from the plane, and join them in the reverse order. A bounded
+     search with backtracking looks for such an order. Each join covers *all* faces between the
+     two sub-assemblies.
+   - **Motion:** the sub-assembly with more pieces stays still and the other slides along ±axis.
+     On a tie, the one holding the first piece in piece order stays (r12).
+   - **Why this works:** a sub-assembly not yet joined on a plane lies on one side of it, so every
+     join is one straight motion parallel to all its pins.
+   - **No clear path:** the step stays in the order, marked `clear_path: false`, with W013 (r12).
    - **Why bottom-up doesn't:** a piece-by-piece order fails. In any 2×2 layer, the last piece
      would have to slide along two perpendicular directions at once.
    - Joins without connectors are listed as "glue only".
@@ -1624,7 +1633,8 @@ never touching a connector.
    - a summary;
    - the print list: parts, and dowels with their counts;
    - the assembly steps grouped by stage, with "let the glue set before the next stage";
-   - the diagnostics, with codes linking to `docs/TROUBLESHOOTING.md`.
+   - the diagnostics, each naming its section of `docs/TROUBLESHOOTING.md` in plain text: a
+     relative link wouldn't resolve from the output folder (r12).
 5. **`preview_exploded.glb`**: each piece is moved away from the centre by `preview_spread` × the
    model size per grid step, coloured from a fixed 12-colour palette.
 6. **Console summary:** pieces, connectors, dowels to print, diagnostics, output path, and the exit
@@ -1635,7 +1645,8 @@ never touching a connector.
 - On synthetic graphs:
   - every connected group is joined exactly once per stage;
   - the order is deterministic.
-- Every exported STL reloads watertight and fits U (peg-adjusted).
+- Every exported STL reloads watertight and fits the printable volume; without pegs it also fits U
+  (r10, r12).
 - `assembly.json` validates against the schema and has `schema_version`.
 - No output contains the temporary directory's absolute path or an ISO timestamp.
 - Two runs in separate processes give byte-identical output directories.
@@ -1767,7 +1778,7 @@ Phase 0 turns each row into `docs/adr/NNNN-*.md` using Appendix A.
 | 0001 | manifold3d for all solid geometry. trimesh only for file I/O, basic repair and the GLB preview. | Guaranteed-manifold booleans, fast native slice, ray cast and min_gap, one geometry kernel. Hand-made booleans are the main source of broken STLs. |
 | 0002 | Cut regions are the intersection of the slices at offset ± ε of the normalized input body. | One source of truth for both sides of a face, and correct when a model face lies on the plane. |
 | 0003 | Even grid plus a bounded nudge with a lexicographic score. | Predictable, always fits; ties keep planes in place; a global optimiser is a v2 problem. |
-| 0004 | Assembly in stages: X rows, then Y layers, then the Z stack. | The only order that is always physically possible with straight pins. |
+| 0004 | Assembly in stages: X rows, then Y layers, then the Z stack (within a plane: r12). | Every join is one straight move along its pins; a move that can't be shown clear gets W013. |
 | 0005 | Dowels by default; pegs optional on any face, with U reduced by the protrusion. | Pins printed lying flat are the strongest; pegs either print vertically (weak) or need support. |
 | 0006 | Standard pin lengths, symmetric pins, explicit axial play; `--dowel-length` is the exact pin length. | One definition of length, and only a few pin files to print. |
 | 0007 | Try the mesh as-is first; sign-aware shell normalization; never `fix_normals(multibody=True)`. | Don't damage valid models; keep voids; fix overlapping shells. |
@@ -1936,8 +1947,35 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `wide_u_shape` | U-shaped extrusion, 20 mm arms on a 10 mm base, 60 mm deep (r8) | Connectors in both arms |
 | `wedge` | 40 mm block whose top falls 0.4 mm per mm behind its cut face at x = 40 | Depth and containment checks |
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
+| `crossed_loop` | One closed loop crossing x = 25 four times, two bodies on each side, one plate in the other's way along X | Assembly order within a plane (r12) |
+| `hooked_strips` | Three strips on each side of x = 10, woven into one solid, a hook of the third behind the first | The order search must backtrack (r12) |
+| `interlocked_bodies` | Two bodies below x = 10, each in the other's way along X, held by a block above | W013, in a split and a dry run (r12) |
 
 ## Appendix E — Plan revisions
+
+**r12 — 2026-11-21 (Phase 9).** Found while planning and implementing Phase 9, agreed with the
+maintainer:
+
+- **Join rule within a plane** (Phase 9, task 1; ADR-0004). Joining in plain face order can pair
+  two sub-assemblies that each hold pieces on both sides of a plane: on a valid loop crossing a
+  plane four times, the third join needed +X and −X at once. Sub-assemblies are now taken apart
+  one at a time along a clear path, and joined in reverse. The stages don't change.
+- **Order search** (task 1). Found by the review: taking off the first clear candidate can strand
+  another piece and report a blocked step when a clear order exists. A depth-first search with
+  backtracking now looks for one, up to `ASSEMBLY_SEARCH_STATES` states.
+- **W013** (§4.5, partial) and `AssemblyStep.clear_path` (§5.2): a move that can't be shown clear
+  is reported. The check (`geometry.blocks_exit`) is conservative.
+- **The dry run plans the order** (§7.1). Found by the review: it exited 0 where the split exited
+  3 on W013. Both now check the same solids, pegs on and holes not cut (`tools.with_pegs`).
+- **Fit test** (Phase 9). "Fits U (peg-adjusted)" contradicted r10: a pegged piece exceeds U by
+  the peg, by design. Exported pieces are tested against the printable volume, and against U
+  without pegs.
+- **Troubleshooting references** (task 4). A relative link breaks in the user's output folder and
+  the project has no public URL, so `assembly.md` names the section in plain text.
+- **`assembly` imports `geometry` and `errors`** (§3.1), for connector positions, the clear-path
+  check and W013; no cycle.
+- **`label_font` in `assembly.json`** (task 3) is a file name only: the setting may be an absolute
+  path, which outputs must not contain (§4.4).
 
 **r11 — 2026-11-21 (Phase 8).** Found while planning and implementing Phase 8, agreed with the
 maintainer:

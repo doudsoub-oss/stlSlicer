@@ -304,7 +304,9 @@ cell c and P in c', adjacent across a plane π of axis a.
   every remaining face is still perpendicular to its join axis (I7).
 
 The guard is conservative: it also rejects pieces in S's shadow on the far side of S, which
-S never reaches.
+S never reaches. On a plane with several bodies per cell, a join can also leave pieces of c's
+other bodies out of the static side (r12). The clear-path check of the
+[assembly order](#assembly-order) measures the merged piece, S included, so it covers that case.
 
 Examples (`tests/integration/test_cutting.py`): the `knob` tip (180 mm³) merges into the box
 half (W005). With a block over the tip's footprint (`knob(blocked=True)`), or a fin 0.025 mm
@@ -650,4 +652,52 @@ their engravings don't touch, each being in its own piece.
 **Tests:** `tests/unit/test_labels.py`, `tests/integration/test_labels.py`.
 
 ## Assembly order
-TODO (Phase 9)
+
+Input: the final pieces, their cut faces and connectors. Output: the steps, the final groups and
+the W013 diagnostics. Code: `assembly.plan_steps`. Decision: ADR-0004, amended in r12.
+
+```
+for axis in X, Y, Z:                 # one stage per axis
+  for plane of that axis, by index:
+    for each cluster of sub-assemblies the plane's faces connect:
+      take them apart one at a time  # leaves the rest connected, clear path away from the plane
+      join them in reverse order
+```
+
+**Why plane by plane.** Before a plane is processed, no join has crossed it. So every sub-assembly
+it touches lies entirely on one side, and all of that sub-assembly's faces on the plane close in
+the same direction. A small merged piece doesn't change this: it touches only the piece that
+absorbs it, so its faces are gone (ADR-0012).
+
+**Why not in plain face order.** Take a loop crossing a plane four times, with bodies La and Lb
+below and Ra and Rb above, each touching both across the plane (`crossed_loop`). Face order joins
+La+Ra, then Lb+Rb. Those two sub-assemblies each hold pieces on both sides, so closing them needs
++X for one pin and −X for another.
+
+**Taking a cluster apart.** Each sub-assembly taken off must (1) leave the others connected, so
+that it has something to join in the reversed order, and (2) have a clear path. A depth-first
+search in piece order looks for an order where all of them do (`assembly._clear_order`). It
+backtracks because taking off a harmless piece can strand another (`hooked_strips`), remembers the
+sets that led nowhere, and stops after `ASSEMBLY_SEARCH_STATES` (4096, every order of up to 12
+sub-assemblies). Without a fully clear order, it goes greedily: the first that satisfies both, or
+else the first that satisfies (1), whose step gets `clear_path: false` and **W013**. A connected
+graph always has at least two vertices that satisfy (1).
+
+**Clear path** (`geometry.blocks_exit`, on `tools.with_pegs`: pegs on, holes and labels not cut).
+That is at least as much material as the final piece, so a clear path stays proven, and a dry
+run, which cuts nothing, gets the same answer as a split. Only pieces on the same
+side of the plane are checked, since the sub-assembly moves away from the plane. For each
+connected overlap of two shadows along the axis, the mover must lie entirely on the exit side of
+the other solid, within `ASSEMBLY_PATH_TOLERANCE` (1e-6 mm). `False` is a proof. `True` is a doubt:
+two solids whose layers change order inside one overlap are reported as blocking.
+
+In `crossed_loop` the far plate La lies in the way of the near plate Lb. So La comes off first and
+goes on last: Rb onto Lb, then Ra, then La along +X.
+
+**Who moves.** The sub-assembly with more pieces stays still. On a tie, the one holding the first
+piece in piece order stays. `direction` is the move of the other one. A join with no connector is
+glue only. Groups that are never joined are listed in `separate_parts`.
+
+**Checks.** Every face belongs to exactly one step, and no sub-assembly lies on both sides of its
+plane (I7, `AssertionError`: exit 4). Tests: `tests/unit/test_assembly_order.py`,
+`tests/integration/test_export.py`.

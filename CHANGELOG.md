@@ -90,6 +90,13 @@ All notable changes to this project are documented here. The format follows
   faces, readable from outside and clear of the connectors, at the largest height that fits
   (4 to 12 mm). A label never goes through a thin part of the piece. A piece with no room on any
   face gets warning W003. `--dry-run` lists the labels, and `--no-label` turns them off.
+- A split now writes every output: `parts/*.stl` (binary, in the model's frame),
+  `assembly.json` (schema version 1), `assembly.md` (print list and steps by stage),
+  `preview_exploded.glb` (`--no-preview` skips it) and a final summary with the exit code. Two
+  runs give byte-identical folders, and a failure before the writing starts keeps the previous
+  outputs.
+- Assembly order: X joins, then Y, then Z, each join one straight move along its pins. New
+  diagnostic W013 (exit 3) for a move that can't be shown to have a clear path.
 
 ### Changed
 - A run that draws text exits 1 when `advanced.label_font` isn't a font, or is a symbol or

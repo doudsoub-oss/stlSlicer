@@ -232,6 +232,88 @@ def wide_u_shape() -> Manifold:
     )
 
 
+def crossed_loop() -> Manifold:
+    """One closed loop that crosses the plane x = 25 four times (PLAN.md Appendix E, r12).
+
+    Four 8 mm columns run along X at the corners of a 38 mm square. Below the plane, a far plate
+    (x 0 to 5) joins two opposite columns, and a near plate (x 10 to 16), notched around those
+    two, joins the other two. Above it, two bars (x 40 to 50) join the columns in pairs the
+    other way. Each side holds two bodies, and each body touches both bodies across the plane.
+    The near plate can only go in before the far plate, which lies in its way along X.
+    """
+
+    def block(low: tuple[float, float, float], high: tuple[float, float, float]) -> Manifold:
+        size = (high[0] - low[0], high[1] - low[1], high[2] - low[2])
+        return Manifold.cube(size).translate(low)
+
+    near_plate = (
+        block((10.0, 0.0, 0.0), (16.0, 38.0, 38.0))
+        - block((9.0, -1.0, -1.0), (17.0, 11.0, 11.0))
+        - block((9.0, 27.0, 27.0), (17.0, 39.0, 39.0))
+    )
+    return Manifold.batch_boolean(
+        [
+            block((0.0, 0.0, 0.0), (5.0, 38.0, 38.0)),
+            near_plate,
+            block((40.0, 0.0, 0.0), (50.0, 38.0, 8.0)),
+            block((40.0, 0.0, 30.0), (50.0, 38.0, 38.0)),
+            block((0.0, 0.0, 0.0), (50.0, 8.0, 8.0)),
+            block((0.0, 30.0, 30.0), (50.0, 38.0, 38.0)),
+            block((10.0, 0.0, 30.0), (50.0, 8.0, 38.0)),
+            block((10.0, 30.0, 0.0), (50.0, 38.0, 8.0)),
+        ],
+        OpType.Add,
+    )
+
+
+def _union_of_boxes(*corners: tuple[tuple[float, ...], tuple[float, ...]]) -> Manifold:
+    boxes = [
+        Manifold.cube((hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])).translate(
+            (lo[0], lo[1], lo[2])
+        )
+        for lo, hi in corners
+    ]
+    return Manifold.batch_boolean(boxes, OpType.Add)
+
+
+def hooked_strips() -> Manifold:
+    """Three strips on each side of x = 10, woven into one solid (PLAN.md Appendix E, r12).
+
+    A hook of the third strip lies behind the first one on each side, so the first must come
+    off before the third. Taking off the first clear candidate in piece order strands it: a
+    fully clear order exists, but only a search with backtracking finds it.
+    """
+    return _union_of_boxes(
+        ((5, 12, 0), (10, 50, 10)),
+        ((5, 0, 20), (10, 38, 30)),
+        ((5, 0, 1), (10, 4, 20)),
+        ((5, 0, 40), (10, 50, 50)),
+        ((0, 40, 40), (5, 44, 50)),
+        ((0, 40, 5), (3, 44, 50)),
+        ((10, 0, 0), (15, 10, 56)),
+        ((10, 20, 0), (15, 30, 50)),
+        ((10, 40, 1), (15, 50, 56)),
+        ((15, 40, 52), (20, 50, 56)),
+        ((17, 0, 52), (20, 50, 56)),
+    )
+
+
+def interlocked_bodies() -> Manifold:
+    """Two bodies below x = 10, each in the other's way along X, held by a block above it (r12).
+
+    No order of straight moves along X can put them together: W013.
+    """
+    return _union_of_boxes(
+        ((0, 0, 0), (4, 10, 10)),
+        ((0, 10, 0), (10, 20, 10)),
+        ((6, 20, 0), (10, 30, 10)),
+        ((6, 0, 0), (10, 9, 20)),
+        ((0, 21, 0), (4, 30, 20)),
+        ((0, 0, 12), (10, 30, 20)),
+        ((10, 0, 0), (20, 30, 20)),
+    )
+
+
 WEDGE_SLOPE = 0.4
 """How fast the top of ``wedge`` falls behind its cut face, mm per mm along X."""
 

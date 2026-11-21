@@ -100,6 +100,9 @@ DIAGNOSTIC_CODES: tuple[DiagnosticCode, ...] = (
     DiagnosticCode("W010", "info", "Overlapping shells were merged."),
     DiagnosticCode("W011", "warning", "An inside-out body was flipped."),
     DiagnosticCode("W012", "info", "The model already fits: nothing to cut."),
+    DiagnosticCode(
+        "W013", "partial", "No clear straight path could be shown for an assembly step."
+    ),
 )
 """Every diagnostic code, sorted by code (PLAN.md §4.5)."""
 

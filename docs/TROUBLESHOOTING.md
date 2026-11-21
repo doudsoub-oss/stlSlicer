@@ -96,6 +96,7 @@ exit with 3.
 | W010 | info | Overlapping shells were merged |
 | W011 | warning | An inside-out body was flipped |
 | W012 | info | The model already fits: nothing to cut |
+| W013 | partial | No clear straight path could be shown for an assembly step |
 
 ### W001 — Cut face without connector (partial)
 A cut face got no dowel hole (or peg), so the two pieces meet there without anything to align
@@ -201,6 +202,14 @@ nothing to cut. The message gives U. stlsplit continues with that single piece, 
 connectors or labels, and exits 0. If you expected a split, check `--bed`, `--margin` and
 `--scale`: a model exported in centimetres or inches looks 10 or 25.4 times too small (see also
 W006).
+
+### W013 — Assembly step without a proven clear path (partial)
+Two bodies on the same side of a cut plane may be in each other's way, so stlsplit couldn't show
+that one step of `assembly.md` is a clear straight move. The message gives the step and the
+pieces. The check is cautious, so the move may well work: **try it dry before gluing**. If it
+is really blocked, change the cut with `--bed`, `--margin` or `--no-auto-orient`, or adjust the
+model so those bodies don't interlock along that axis. The pieces themselves are valid. The
+run exits 3.
 
 ## Common problems
 

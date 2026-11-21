@@ -129,6 +129,33 @@ STEP_COUNT_TOLERANCE = 1e-9
 OUTPUT_DECIMALS = 6
 """Floats in JSON, Markdown and the dry-run plan are rounded to this many decimals (§4.1)."""
 
+ASSEMBLY_SCHEMA_VERSION = 1
+"""``schema_version`` of ``assembly.json`` (§8.6; history in docs/OUTPUT_FORMAT.md)."""
+
+ASSEMBLY_PATH_TOLERANCE = 1e-6
+"""Slack when comparing positions along a move, mm (r12): a solid that ends where another
+starts, within this, isn't in its way."""
+
+ASSEMBLY_SEARCH_STATES = 4096
+"""States the search for a fully clear join order may visit on one cluster (r12). It covers every
+order of up to 12 sub-assemblies; past it, the order is greedy and a blocked move gets W013."""
+
+PREVIEW_PALETTE: tuple[tuple[int, int, int, int], ...] = (
+    (31, 120, 180, 255),
+    (255, 127, 0, 255),
+    (51, 160, 44, 255),
+    (227, 26, 28, 255),
+    (106, 61, 154, 255),
+    (177, 89, 40, 255),
+    (166, 206, 227, 255),
+    (253, 191, 111, 255),
+    (178, 223, 138, 255),
+    (251, 154, 153, 255),
+    (202, 178, 214, 255),
+    (255, 255, 153, 255),
+)
+"""The 12 preview colours, RGBA, in the order pieces take them (ADR-0010, Phase 9, task 5)."""
+
 GRID_TOLERANCE = 1e-9
 """Relative slack of the even grid (Phase 3), dimensionless.
 
@@ -849,6 +876,23 @@ def to_toml(cfg: Config) -> str:
         section = getattr(cfg, table)
         lines.extend(f"{name} = {_toml_value(getattr(section, name))}" for name in names)
     return "\n".join(lines) + "\n"
+
+
+def as_dict(cfg: Config) -> dict[str, dict[str, Any]]:
+    """Return the configuration as plain data, for ``assembly.json`` (PLAN.md Phase 9, task 3).
+
+    Args:
+        cfg: The configuration.
+
+    Returns:
+        Table name to key to value, in declaration order; tuples become lists.
+    """
+    tables: dict[str, dict[str, Any]] = {}
+    for table, names in _FIELD_TYPES.items():
+        section = getattr(cfg, table)
+        values = {name: getattr(section, name) for name in names}
+        tables[table] = {k: list(v) if isinstance(v, tuple) else v for k, v in values.items()}
+    return tables
 
 
 # --- Helpers ---------------------------------------------------------------------------------

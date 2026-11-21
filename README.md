@@ -4,13 +4,9 @@ Split an STL model that is too big for your printer into pieces that each fit th
 with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
 assembly map telling you which piece goes where.
 
-> **Status:** under development (Phase 5 of PLAN.md). The command line, the configuration, the
-> output-directory policy, loading and repairing the input STL, auto-orientation, the grid, the
-> cutting into pieces and cut faces, and the placement of the connectors work, and `--dry-run`
-> prints the grid, the pieces, the faces, the connectors and the pins to print. The holes and
-> output files don't exist yet, so the split and dry run stop with a warning after the
-> connector placement, and the calibration after its checks. Sections marked TODO are filled
-> in as the features land.
+> **Status:** under development (Phase 9 of PLAN.md). A split writes every output: the pieces,
+> the dowels, the assembly map and a 3D preview. Robustness, performance and the final
+> documentation come in Phases 10 and 11. Sections marked TODO are filled in as they land.
 
 ```bash
 stlsplit model.stl -o ./out --bed 220 220 250
@@ -31,7 +27,15 @@ Optional, GPL-licensed repair fallback for badly broken meshes: `pip install -e 
 
 ## Quick start (5 minutes)
 
-TODO (Phase 9): from a model to printed, assembled pieces.
+```bash
+stlsplit --calibrate -o ./calibration                # once per printer: pick your clearance
+stlsplit model.stl -o ./out --bed 220 220 250 --clearance 0.2
+```
+
+1. Open `out/preview_exploded.glb` in any glTF viewer to check the cuts.
+2. Print every file of `out/parts/`, and the dowels of `out/dowels/` in the quantities the log
+   and `out/assembly.md` give.
+3. Follow the steps in `out/assembly.md`.
 
 ## Usage
 
@@ -94,8 +98,18 @@ will be horizontal, pick one step looser.
 
 ## The output folder
 
-TODO (Phase 9): `parts/`, `dowels/`, `assembly.json`, `assembly.md`, `preview_exploded.glb`
-(docs/OUTPUT_FORMAT.md).
+```text
+out/
+├── parts/X0-Y0-Z0.stl ...      # one file per piece, print one of each
+├── dowels/dowel_d5.0_l20.0.stl # one file per pin length, print the quantity listed
+├── assembly.md                 # print list and assembly steps, for you
+├── assembly.json               # the same and more, for other tools
+└── preview_exploded.glb        # the pieces moved apart, one colour each
+```
+
+Pieces keep their position in the model, so a slicer may place them away from the bed's centre
+until you arrange them. Each one fits the bed as loaded. `--no-preview` skips the GLB. Every field
+is described in [docs/OUTPUT_FORMAT.md](docs/OUTPUT_FORMAT.md).
 
 ## Piece labels
 
@@ -122,7 +136,29 @@ from the blind holes. Pins are symmetric, so either end can go in first.
 
 ## Assembling
 
-TODO (Phase 9): following `assembly.md`, gluing.
+`assembly.md` lists the joins in three stages: X joins build rows, Y joins build layers, and Z
+joins stack the layers. Doing them in this order means every join is one straight move along
+its pins.
+
+```text
+### Stage 1: X joins (rows)
+
+- **1.1** Slide `X1-Y0-Z0` along -x onto `X0-Y0-Z0`. Dowels: 2 x 20 mm.
+- **1.2** Slide `X1-Y1-Z0` along -x onto `X0-Y1-Z0`. Dowels: 2 x 20 mm.
+
+Let the glue set before the next stage.
+```
+
+1. Dry-fit each join first. Directions are the axes of the part files, and the engraved labels
+   tell you which piece is which.
+2. Put glue in the holes and on the faces, insert the dowels listed for that step, and slide
+   the pieces together.
+3. Let the glue set before starting the next stage: the next joins move whole sub-assemblies.
+
+A join marked **glue only** has no connector, so hold it in place while it sets. A move marked
+**W013** couldn't be shown to have a clear path: try it dry before gluing
+([TROUBLESHOOTING](docs/TROUBLESHOOTING.md)). Groups listed under **Separate parts** never touch
+each other in the model.
 
 ## Known limits
 

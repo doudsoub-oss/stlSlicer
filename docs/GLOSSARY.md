@@ -5,6 +5,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | Term | Meaning |
 |---|---|
 | **Assembly step** | One join in the assembly order: a sub-assembly moved along one axis onto another (`assembly.md`). Numbered `stage.join`, e.g. `2.3`. |
+| **Clear path** | A straight way out for a sub-assembly, along the join's axis and away from the plane, with nothing on its side in the way. A step without a proven one gets W013. |
 | **Axial play** (a) | Extra hole depth beyond each pin end: each hole is h(L) = L/2 + a deep (10.5 mm for a 20 mm pin), so there is room for glue and the pin never bottoms out. |
 | **Candidate** | A possible connector axis point on a face: a point of the g = d/4 grid inside the safe region, or a part's polylabel point. Candidates are tried in a fixed order until enough pass the 3D checks. |
 | **Body** | One connected solid: an outer shell with the voids it holds. A grid cell can contain several bodies; each becomes a piece. |
@@ -40,5 +41,6 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Slack** (of a plane) | How far a cut plane can move on each side while it stays between its neighbours and both cells it bounds still fit the usable volume. Nudging stays within it. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
 | **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). A connector takes the longest one whose holes fit the material behind the face on both sides; shorter than L_max gives W002. |
+| **Sub-assembly** | Pieces already joined together; a single piece counts as one. |
 | **Usable volume** (U) | The space a grid cell may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode so that a full cell plus its peg still fits the printable volume. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |
 | **Void** | An empty space enclosed inside a solid, bounded by an inward-facing shell; repair keeps it. |
