@@ -397,6 +397,85 @@ def test_a_failure_in_the_tools_keeps_the_previous_outputs(
     assert (out / "dowels" / "old.stl").read_text() == "old"
 
 
+def previous_outputs(out: Path) -> Path:
+    """An output folder from an earlier run, with one old file in ``dowels/``."""
+    (out / "parts").mkdir(parents=True)
+    (out / "calibration").mkdir()
+    (out / "dowels").mkdir()
+    old = out / "dowels" / "old.stl"
+    old.write_text("old")
+    return old
+
+
+def test_force_refuses_to_delete_the_input_file(
+    write_stl: WriteStl, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "out"
+    old = previous_outputs(out)
+    model = out / "parts" / "in.stl"
+    model.write_bytes(write_stl(cube(), "model").read_bytes())
+    data = model.read_bytes()
+    assert cli.main([str(model), "-o", str(out), "--force"]) == ExitCode.INVALID_INPUT
+    assert model.read_bytes() == data
+    assert old.read_text() == "old"
+    err = capsys.readouterr().err
+    assert len(err.splitlines()) == 2  # the configuration line, then the one-line error
+    assert "--force would delete" in err
+
+
+@pytest.mark.parametrize("calibrating", [False, True], ids=["split", "calibrate"])
+def test_force_refuses_to_delete_the_config_file(
+    write_stl: WriteStl, tmp_path: Path, calibrating: bool
+) -> None:
+    out = tmp_path / "out"
+    old = previous_outputs(out)
+    toml = out / "calibration" / "my_printer.toml"
+    toml.write_text("[printer]\nmargin = 4\n")
+    mode = ["--calibrate"] if calibrating else [str(write_stl(cube(), "model"))]
+    assert cli.main([*mode, "--config", str(toml), "-o", str(out), "--force"]) == (
+        ExitCode.INVALID_INPUT
+    )
+    assert toml.is_file()
+    assert old.read_text() == "old"
+
+
+def test_force_refuses_to_delete_a_custom_label_font(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    old = previous_outputs(out)
+    font = out / "calibration" / "font.ttf"
+    font.write_bytes(io.resolve_label_font(Config().advanced.label_font).read_bytes())
+    toml = tmp_path / "font.toml"
+    toml.write_text(f"[advanced]\nlabel_font = '{font}'\n")
+    arguments = ["--calibrate", "--config", str(toml), "-o", str(out), "--force"]
+    assert cli.main(arguments) == ExitCode.INVALID_INPUT
+    assert font.is_file()
+    assert old.read_text() == "old"
+
+
+def test_force_still_replaces_the_outputs_when_the_input_is_beside_them(
+    write_stl: WriteStl, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    old = previous_outputs(out)
+    model = out / "model.stl"
+    model.write_bytes(write_stl(cube(), "model").read_bytes())
+    assert cli.main([str(model), "-o", str(out), "--force"]) == ExitCode.SUCCESS
+    assert model.is_file()
+    assert not old.exists()
+
+
+def test_dry_run_with_force_deletes_nothing_so_it_is_not_refused(
+    write_stl: WriteStl, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    old = previous_outputs(out)
+    model = out / "parts" / "in.stl"
+    model.write_bytes(write_stl(cube(), "model").read_bytes())
+    assert cli.main([str(model), "--dry-run", "-o", str(out), "--force"]) == ExitCode.SUCCESS
+    assert model.is_file()
+    assert old.read_text() == "old"
+
+
 def test_dry_run_accepts_and_ignores_the_output_option(write_stl: WriteStl, tmp_path: Path) -> None:
     out = tmp_path / "out"
     stl = write_stl(cube(), "model")

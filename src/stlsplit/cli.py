@@ -438,6 +438,8 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if mode is Mode.PRINT_CONFIG:
         sys.stdout.write(config.to_toml(cfg))
         return ExitCode.SUCCESS
+    if mode is not Mode.DRY_RUN and "force" in ns:  # before any work: a dry run deletes nothing
+        io.check_force_keeps(ns.output, _files_read(ns, cfg))
     if mode is Mode.CALIBRATE:
         return _write_calibration_kit(ns, cfg)
     exit_code = ExitCode.SUCCESS
@@ -500,6 +502,12 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         mode.value,
     )
     return exit_code
+
+
+def _files_read(ns: argparse.Namespace, cfg: Config) -> list[Path]:
+    """The files this run reads: the label font, and the input and ``--config`` file if given."""
+    given: list[Path] = [getattr(ns, name) for name in ("input", "config") if name in ns]
+    return [io.resolve_label_font(cfg.advanced.label_font), *given]
 
 
 def _write_pins(output: Path, pins: Sequence[tools.PinGroup]) -> None:

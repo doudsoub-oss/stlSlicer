@@ -194,6 +194,8 @@ cli: io.prepare_output_dir → io.write_stl_files (dowels/)
   float noise (docs/LIBRARY_NOTES.md, `manifold.face_float_noise`).
 - `calibrate` can't import `io`, so the CLI resolves the font and passes its path.
 - The writers refuse any path outside `io.OWNED_OUTPUTS`, the names `--force` may delete.
+  With `--force`, `io.check_force_keeps` first refuses a run whose input, `--config` file or
+  label font lies inside one of those names.
 - The algorithms: [ALGORITHMS.md](ALGORITHMS.md#tool-solids-pins-and-the-calibration-kit).
 
 ## Frames

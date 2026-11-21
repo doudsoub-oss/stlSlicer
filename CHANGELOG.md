@@ -96,3 +96,8 @@ All notable changes to this project are documented here. The format follows
   15.15 mm both read `l15.2`), instead of losing one of them.
 - `--calibrate` exits 1 for a bar that doesn't fit the printer, an engraving that would reach a
   hole, or holes that would touch.
+
+### Fixed
+- `--force` could delete the file it was reading: `stlsplit out/parts/model.stl -o out --force`
+  removed the input with `parts/`. It now exits 1 before any work when the input, the `--config`
+  file or a custom label font lies inside an output it would delete.

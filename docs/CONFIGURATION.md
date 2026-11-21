@@ -163,6 +163,9 @@ are listed with their formulas in PLAN.md §6 and computed in one place, `config
   `calibration/`, `assembly.json`, `assembly.md` and `preview_exploded.glb`. Everything else
   in the directory is kept, and the directory itself is never deleted.
 - An owned name that is a symlink is unlinked; what it points to is never touched.
+- `--force` refuses (exit 1, before any work) to run when it would delete a file the run reads:
+  the input, the `--config` file or a custom label font inside one of those outputs, such as
+  `stlsplit out/parts/model.stl -o out --force`.
 
 ## Example configuration
 

@@ -9,13 +9,14 @@ kit (Phase 7); the rest of the outputs come in Phase 9.
 
 Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
 raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
-deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting. The
+deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting;
+``check_force_keeps`` refuses a run whose own input lies inside one of those names. The
 writers only write under a name in ``OWNED_OUTPUTS``, and their bytes depend only on what they
 are given (no timestamp, ADR-0010).
 """
 
 import shutil
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -124,6 +125,41 @@ def prepare_output_dir(path: Path, force: bool) -> None:
         )
     for name in OWNED_OUTPUTS:
         _remove(path / name)
+
+
+def check_force_keeps(path: Path, files: Iterable[Path]) -> None:
+    """Refuse a ``--force`` run that would delete a file it reads (PLAN.md §7.6).
+
+    With the input in ``out/parts/``, ``stlsplit out/parts/in.stl -o out --force`` would delete
+    it. Links are resolved, so a link to a file inside an owned folder counts as that file.
+    An owned name that is itself a link doesn't count: it is unlinked, and what it points to
+    survives. A path that doesn't exist is ignored, and is reported by whatever reads it.
+
+    Args:
+        path: The output directory (``-o``).
+        files: The files the run reads: the input, the ``--config`` file, the label font.
+
+    Raises:
+        InputError: Deleting an entry of ``OWNED_OUTPUTS`` would delete one of ``files``, or
+            the paths can't be compared.
+    """
+    existing = [file for file in files if file.exists()]
+    for name in OWNED_OUTPUTS:
+        entry = path / name
+        if not entry.exists() or entry.is_symlink() or entry.is_junction():
+            continue
+        for file in existing:
+            real = file.resolve()
+            try:
+                # samefile, not a path comparison: it also holds on case-insensitive disks.
+                held = any(entry.samefile(place) for place in (real, *real.parents))
+            except OSError as exc:
+                raise InputError(f"output directory {path}: can't check {file} ({exc})") from exc
+            if held:
+                raise InputError(
+                    f"--force would delete {file}, which this run reads: it is inside {entry}, "
+                    "one of stlsplit's outputs. Move the file or choose another output directory"
+                )
 
 
 def resolve_label_font(name: str) -> Path:
