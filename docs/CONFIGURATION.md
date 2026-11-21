@@ -162,6 +162,9 @@ are listed with their formulas in PLAN.md §6 and computed in one place, `config
 - `--force` refuses (exit 1, before any work) to run when it would delete a file the run reads:
   the input, the `--config` file or a custom label font inside one of those outputs, such as
   `stlsplit out/parts/model.stl -o out --force`.
+- Replacing the outputs is all or nothing. A run prepares its files in `.stlsplit-staging/`
+  inside the directory and swaps them in at the end, so a failure, a full disk included, keeps
+  the previous outputs. The disk needs room for both versions for a moment.
 
 ## Example configuration
 

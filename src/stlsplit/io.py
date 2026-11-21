@@ -2,22 +2,22 @@
 
 With ``cli``, the only module that touches the file system (PLAN.md §3.1). ``load_stl`` is the
 first pipeline stage (§5.1): it reads the input STL into the input frame (STL coordinates ×
-``--scale``) for ``repair.prepare``. ``prepare_output_dir`` applies the output-directory policy
-(§7.6), and ``resolve_label_font`` and ``check_label_font`` check the configuration rules
-that need the file system (§7.5). ``write_stl_files`` and ``write_text_file`` write the
-calibration kit (Phase 7). A split encodes every output first (``encode_stl``,
-``encode_preview``), so a failure up to there leaves the previous outputs alone, then
-``write_outputs`` writes them (Phase 9). A failure during the write itself, such as a full
-disk, can leave a partial folder.
+``--scale``) for ``repair.prepare``. ``resolve_label_font`` and ``check_label_font`` check the
+configuration rules that need the file system (§7.5). ``encode_stl`` and ``encode_preview`` turn
+the results into bytes, and ``publish_outputs``, the last stage, applies the output-directory
+policy (§7.6) and puts them in place, all or nothing.
 
 Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
-raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
-deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting;
-``check_force_keeps`` refuses a run whose own input lies inside one of those names. The
-writers only write under a name in ``OWNED_OUTPUTS``, and their bytes depend only on what they
-are given (no timestamp, ADR-0010).
+raises ``InputError``. ``publish_outputs`` writes only under a name in ``OWNED_OUTPUTS``, never
+deletes the output directory itself or a name outside ``OWNED_OUTPUTS``, never follows a symlink
+while deleting, and keeps the previous outputs if it fails; ``check_force_keeps`` refuses a run
+whose own input lies inside one of those names. The bytes depend only on what they are given
+(no timestamp, ADR-0010).
 """
 
+import contextlib
+import logging
+import os
 import shutil
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -40,6 +40,12 @@ OWNED_OUTPUTS: tuple[str, ...] = (
 )
 """Every name stlsplit writes in the output directory, and the only names ``--force`` deletes
 (PLAN.md §7.6). The writers below use this same constant."""
+
+STAGING_DIR = ".stlsplit-staging"
+"""Folder inside the output directory where a run prepares its files (§7.6, r13). Inside it, so
+that moving them into place is a rename on one file system. It is gone after a normal run."""
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PreviewMesh(NamedTuple):
@@ -106,22 +112,64 @@ def load_stl(path: Path, scale: float) -> tuple[trimesh.Trimesh, list[Diagnostic
     return mesh, diagnostics
 
 
-def prepare_output_dir(path: Path, force: bool) -> None:
-    """Make ``path`` ready to receive the outputs (PLAN.md §7.6).
+class _StrandedOutputsError(InputError):
+    """A swap failed and couldn't be undone: the staging folder holds the only old copies."""
+
+
+def publish_outputs(path: Path, files: Mapping[str, bytes], force: bool) -> None:
+    """Replace stlsplit's outputs in ``path`` with ``files``, all or nothing (§7.6, r13).
 
     A missing directory is created with its parents. An empty one is used as is. A non-empty
-    one is refused unless ``force`` is set; then only the entries named in ``OWNED_OUTPUTS``
-    are deleted, everything else is kept. An owned name that is a symlink (or a Windows
-    junction) is unlinked, never followed.
+    one is refused unless ``force`` is set; then every entry named in ``OWNED_OUTPUTS`` is
+    replaced and everything else is kept. An owned name that is a symlink (or a Windows
+    junction) is moved and unlinked, never followed.
+
+    The files are first written in full to ``STAGING_DIR``, so a full disk can't touch the
+    previous outputs. They are then swapped in by renames, which are undone if one fails. The
+    old outputs are deleted last. The disk needs room for both for a moment.
 
     Args:
         path: The output directory (``-o``).
+        files: Content by path relative to ``path``, with ``/`` separators, under a name of
+            ``OWNED_OUTPUTS``. Written in sorted name order.
         force: ``--force`` was given.
 
     Raises:
+        ValueError: A path isn't under an owned name (a bug); nothing is touched.
         InputError: ``path`` exists but isn't a directory, is a dangling symlink, is not empty
-            and ``force`` is off, or can't be created, read or cleaned.
+            and ``force`` is off, or holds old outputs of a run that didn't finish; or a file
+            can't be written or moved. The previous outputs are then still in place, or, if
+            even undoing the swap failed, in ``STAGING_DIR/old``, as the message says.
     """
+    names = sorted(files)
+    for name in names:
+        _owned_path(path, name)
+    created = _check_output_dir(path, force)
+    staging = path / STAGING_DIR
+    new, old = staging / "new", staging / "old"
+    try:
+        _remove(staging)
+        try:
+            new.mkdir(parents=True)
+            old.mkdir()
+        except OSError as exc:
+            raise InputError(f"can't write {staging} ({exc})") from exc
+        for name in names:
+            _write_bytes(_owned_path(new, name), files[name])
+        _swap(path, new, old)
+    except _StrandedOutputsError:
+        raise  # the staging folder holds the only copy of the old outputs: keep it
+    except BaseException:  # Ctrl-C too: leave the folder as it was
+        shutil.rmtree(staging, ignore_errors=True)
+        if created:
+            with contextlib.suppress(OSError):
+                path.rmdir()
+        raise
+    _delete_replaced(staging, old)
+
+
+def _check_output_dir(path: Path, force: bool) -> bool:
+    """Apply the policy of §7.6 without deleting anything; return whether ``path`` was created."""
     if path.is_symlink() and not path.exists():
         raise InputError(f"output directory {path} is a dangling symbolic link")
     if not path.exists():
@@ -129,22 +177,83 @@ def prepare_output_dir(path: Path, force: bool) -> None:
             path.mkdir(parents=True)
         except OSError as exc:
             raise InputError(f"output directory {path}: can't create it ({exc})") from exc
-        return
+        return True
     if not path.is_dir():
         raise InputError(f"output directory {path} exists and is not a directory")
     try:
         empty = not any(path.iterdir())
+        if empty:
+            return False
+        if not force:
+            raise InputError(
+                f"output directory {path} is not empty; use --force to replace stlsplit's "
+                "outputs in it (other files are kept)"
+            )
+        stranded = path / STAGING_DIR / "old"
+        if stranded.is_dir() and any(stranded.iterdir()):
+            raise InputError(
+                f"{stranded} holds outputs of an earlier run that didn't finish, possibly the "
+                f"only copy: move what you need out of it, then delete {path / STAGING_DIR}"
+            )
     except OSError as exc:
         raise InputError(f"output directory {path}: can't read it ({exc})") from exc
-    if empty:
-        return
-    if not force:
-        raise InputError(
-            f"output directory {path} is not empty; use --force to replace stlsplit's outputs "
-            "in it (other files are kept)"
+    return False
+
+
+def _swap(path: Path, new: Path, old: Path) -> None:
+    """Move the owned entries to ``old`` and those of ``new`` into ``path``; undo on failure."""
+    moved_out: list[str] = []
+    moved_in: list[str] = []
+    try:
+        for name in OWNED_OUTPUTS:
+            if os.path.lexists(path / name):  # a dangling symlink counts
+                os.replace(path / name, old / name)
+                moved_out.append(name)
+        for entry in sorted(new.iterdir()):
+            os.replace(entry, path / entry.name)
+            moved_in.append(entry.name)
+    except BaseException as exc:
+        if not _undo_swap(path, new, old, moved_out, moved_in):
+            raise _StrandedOutputsError(
+                f"can't replace the outputs in {path} ({exc}), and couldn't put the previous "
+                f"ones back: they are in {old}"
+            ) from exc
+        if isinstance(exc, OSError):
+            raise InputError(
+                f"can't replace the outputs in {path} ({exc}); the previous outputs were kept"
+            ) from exc
+        raise
+
+
+def _undo_swap(
+    path: Path, new: Path, old: Path, moved_out: Sequence[str], moved_in: Sequence[str]
+) -> bool:
+    """Put everything back, trying every entry; return whether all of it worked."""
+    restored = True
+    for source, target in [
+        *((path / name, new / name) for name in reversed(moved_in)),
+        *((old / name, path / name) for name in reversed(moved_out)),
+    ]:
+        try:
+            os.replace(source, target)
+        except OSError:
+            restored = False
+    return restored
+
+
+def _delete_replaced(staging: Path, old: Path) -> None:
+    """Delete the replaced outputs. The new ones are in place, so a failure is only a warning."""
+    try:
+        for entry in old.iterdir():
+            _remove(entry)  # never follows a symlink or a junction
+        shutil.rmtree(staging)
+    except (OSError, InputError) as exc:
+        LOGGER.warning(
+            "the new outputs are in place, but the old ones couldn't be deleted (%s); "
+            "delete %s yourself",
+            exc,
+            staging,
         )
-    for name in OWNED_OUTPUTS:
-        _remove(path / name)
 
 
 def check_force_keeps(path: Path, files: Iterable[Path]) -> None:
@@ -164,7 +273,7 @@ def check_force_keeps(path: Path, files: Iterable[Path]) -> None:
             the paths can't be compared.
     """
     existing = [file for file in files if file.exists()]
-    for name in OWNED_OUTPUTS:
+    for name in (*OWNED_OUTPUTS, STAGING_DIR):
         entry = path / name
         if not entry.exists() or entry.is_symlink() or entry.is_junction():
             continue
@@ -248,41 +357,6 @@ def check_label_font(path: Path) -> None:
         )
 
 
-def write_stl_files(root: Path, files: Mapping[str, trimesh.Trimesh]) -> None:
-    """Write meshes as binary STL files, in sorted name order.
-
-    trimesh writes an all-zero header, so the bytes hold no timestamp (ADR-0010).
-
-    Args:
-        root: The output directory, already prepared (``prepare_output_dir``).
-        files: Mesh by path relative to ``root``, with ``/`` separators, under a name of
-            ``OWNED_OUTPUTS``.
-
-    Raises:
-        ValueError: A path isn't under an owned name (a bug).
-        InputError: A file can't be written.
-    """
-    targets = {name: _owned_path(root, name) for name in sorted(files)}
-    for name, target in targets.items():
-        _write_bytes(target, cast(bytes, files[name].export(file_type="stl")))
-
-
-def write_text_file(root: Path, name: str, text: str) -> None:
-    """Write a text file as UTF-8, with the same LF line ends on every platform (ADR-0010).
-
-    Args:
-        root: The output directory, already prepared (``prepare_output_dir``).
-        name: Path relative to ``root``, with ``/`` separators, under a name of
-            ``OWNED_OUTPUTS``.
-        text: The content.
-
-    Raises:
-        ValueError: The path isn't under an owned name (a bug).
-        InputError: The file can't be written.
-    """
-    _write_bytes(_owned_path(root, name), text.encode("utf-8"))
-
-
 def encode_stl(mesh: trimesh.Trimesh) -> bytes:
     """Return a mesh as a binary STL with an all-zero header (no timestamp, ADR-0010).
 
@@ -318,23 +392,6 @@ def encode_preview(items: Sequence[PreviewMesh]) -> bytes:
         transform[:3, 3] = item.offset
         scene.add_geometry(mesh, node_name=item.name, geom_name=item.name, transform=transform)
     return cast(bytes, scene.export(file_type="glb"))  # type: ignore[no-untyped-call]
-
-
-def write_outputs(root: Path, files: Mapping[str, bytes]) -> None:
-    """Write already encoded outputs, in sorted name order (PLAN.md §5.1).
-
-    Args:
-        root: The output directory, already prepared (``prepare_output_dir``).
-        files: Content by path relative to ``root``, with ``/`` separators, under a name of
-            ``OWNED_OUTPUTS``.
-
-    Raises:
-        ValueError: A path isn't under an owned name (a bug); nothing is written.
-        InputError: A file can't be written.
-    """
-    targets = {name: _owned_path(root, name) for name in sorted(files)}
-    for name, target in targets.items():
-        _write_bytes(target, files[name])
 
 
 def _owned_path(root: Path, name: str) -> Path:

@@ -93,12 +93,14 @@ All notable changes to this project are documented here. The format follows
 - A split now writes every output: `parts/*.stl` (binary, in the model's frame),
   `assembly.json` (schema version 1), `assembly.md` (print list and steps by stage),
   `preview_exploded.glb` (`--no-preview` skips it) and a final summary with the exit code. Two
-  runs give byte-identical folders, and a failure before the writing starts keeps the previous
-  outputs.
+  runs give byte-identical folders.
 - Assembly order: X joins, then Y, then Z, each join one straight move along its pins. New
   diagnostic W013 (exit 3) for a move that can't be shown to have a clear path.
 
 ### Changed
+- Replacing the outputs is all or nothing, for a split and `--calibrate`: files are prepared in a
+  staging folder and swapped in at the end, so a failed run, a full disk included, keeps the
+  previous outputs. `--force` used to delete them first.
 - A run that draws text exits 1 when `advanced.label_font` isn't a font, or is a symbol or
   placeholder font that can't draw the labels. A file that wasn't a font used to exit 4.
 - `advanced.pin_chamfer` must now be smaller than the pin's radius (exit 1 otherwise): a larger

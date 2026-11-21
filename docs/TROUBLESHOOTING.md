@@ -30,6 +30,8 @@ Common cases:
 | `advanced.label_font: can't read FILE as a font` | The file exists but isn't a font | Use the default `DejaVuSans-Bold.ttf` or a real TrueType font |
 | `advanced.label_font: FONT has no glyph for these characters`, or `draws several of these characters with the same glyph` | A symbol or placeholder font: its labels would be unreadable | Use a text font with digits, `-`, `.` and a to z |
 | `INPUT model.stl: no such file` | The input path is wrong | Check the path |
+| `can't write FILE`, or `can't replace the outputs in DIR ...; the previous outputs were kept` | A full disk, missing permissions, or (on Windows) an output file open in another program, such as a slicer | Free some space or close the program, then run again. Your previous outputs are unchanged |
+| `DIR/.stlsplit-staging/old holds outputs of an earlier run that didn't finish` | A run was killed during the final swap, or couldn't undo it | Move what you need out of that folder, delete `.stlsplit-staging`, then run again |
 | `INPUT model.stl: no triangles found` | The file is empty, isn't an STL, or is an STL without facets | Export the model again as STL |
 | `--simplify (model.simplify): a tolerance of 1000 mm removed the whole model` | The `--simplify` tolerance is as large as the model | Use a much smaller tolerance (a few hundredths of a mm is typical), or none |
 | `INPUT model.stl: can't read it as an STL file` | The file is damaged, e.g. a binary STL cut short during a download or copy | Export or download it again |

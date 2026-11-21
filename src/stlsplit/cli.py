@@ -9,9 +9,9 @@ Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to 
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
 Every stage, the assembly order and the encoding of every output file run before the output
-directory is prepared, so an unusable input never creates the directory, and ``--force`` never
-deletes the previous outputs for it. The calibration kit is likewise built before its directory
-is prepared.
+directory is touched, so an unusable input never creates it. ``io.publish_outputs`` then swaps
+the outputs in, all or nothing, so a failure at any stage keeps the previous outputs (§7.6). The
+calibration kit goes through the same steps.
 """
 
 import argparse
@@ -511,10 +511,8 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         files = _encode_outputs(
             ns, cfg, orientation, layout, result, placement, applied, plan, reported
         )
-    with stage("output directory"):
-        io.prepare_output_dir(ns.output, force="force" in ns)
     with stage("write"):
-        io.write_outputs(ns.output, files)
+        io.publish_outputs(ns.output, files, force="force" in ns)
     for pin in applied.pins:
         LOGGER.info("pins: print %d x %s", pin.quantity, pin.file_name)
     dowels = sum(pin.quantity for pin in applied.pins)
@@ -590,20 +588,17 @@ def _files_read(ns: argparse.Namespace, cfg: Config) -> list[Path]:
 
 
 def _write_calibration_kit(ns: argparse.Namespace, cfg: Config) -> ExitCode:
-    """Build the kit, then write it: a failure leaves the previous outputs alone."""
+    """Build the kit, then publish it: a failure leaves the previous outputs alone."""
     with stage("calibration kit"):
         kit = calibrate.build_kit(cfg, io.resolve_label_font(cfg.advanced.label_font))
-    with stage("output directory"):
-        io.prepare_output_dir(ns.output, force="force" in ns)
     with stage("export"):
-        io.write_stl_files(
-            ns.output,
-            {
-                calibrate.BLOCK_FILE: geometry.to_trimesh(kit.block),
-                kit.pin_file: geometry.to_trimesh(kit.pin),
-            },
-        )
-        io.write_text_file(ns.output, calibrate.README_FILE, kit.readme)
+        files = {
+            calibrate.BLOCK_FILE: io.encode_stl(geometry.to_trimesh(kit.block)),
+            kit.pin_file: io.encode_stl(geometry.to_trimesh(kit.pin)),
+            calibrate.README_FILE: kit.readme.encode("utf-8"),
+        }
+    with stage("write"):
+        io.publish_outputs(ns.output, files, force="force" in ns)
     LOGGER.info("calibration: print %d x %s", calibrate.BLOCKS_TO_PRINT, calibrate.BLOCK_FILE)
     LOGGER.info("calibration: print %d x %s", kit.pin_count, kit.pin_file)
     LOGGER.info("calibration: instructions in %s", calibrate.README_FILE)

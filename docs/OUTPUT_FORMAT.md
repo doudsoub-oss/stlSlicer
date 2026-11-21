@@ -20,7 +20,8 @@ out/
 └── preview_exploded.glb         # unless --no-preview
 ```
 
-There is no `dowels/` folder when the run has no loose pins (`--connector peg` or `none`).
+There is no `dowels/` folder when the run has no loose pins (`--connector peg` or `none`). While
+it runs, stlsplit prepares its files in a `.stlsplit-staging/` folder, which is gone at the end.
 
 `stlsplit --calibrate` writes:
 
