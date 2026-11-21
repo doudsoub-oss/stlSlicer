@@ -264,8 +264,13 @@ def test_assembly_md_lists_separate_parts(write_stl: WriteStl, tmp_path: Path) -
 
 def test_assembly_md_escapes_the_input_file_name(write_stl: WriteStl, tmp_path: Path) -> None:
     out = tmp_path / "out"
-    assert split(write_stl(plate(), "a|b*c"), out) == ExitCode.SUCCESS
-    assert "a\\|b\\*c.stl" in (out / "assembly.md").read_text(encoding="utf-8")
+    # These characters are legal in a file name on every platform.
+    assert split(write_stl(plate(), "a[b]_c#"), out) == ExitCode.SUCCESS
+    assert "a\\[b\\]\\_c\\#.stl" in (out / "assembly.md").read_text(encoding="utf-8")
+    # Windows refuses these two in a file name, so they go straight into the document.
+    loaded = document(out)
+    loaded["input"]["file_name"] = "a|b*c.stl"
+    assert "a\\|b\\*c.stl" in assembly.to_markdown(loaded)
 
 
 def test_an_undecodable_file_name_can_still_be_rendered(
