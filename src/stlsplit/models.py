@@ -2,15 +2,15 @@
 
 Dataclasses only, no behaviour. Each dataclass of §5.2 is added by the phase that first uses
 it: Phase 1 adds ``Diagnostic``; Phase 3 adds ``Orientation``, ``Plane`` and ``Grid``; Phase 4
-adds ``Piece`` and ``CutFace``; Phase 5 adds ``Connector``. ``Label`` (and ``Piece.label``)
-come in Phase 8, ``AssemblyStep`` in Phase 9.
+adds ``Piece`` and ``CutFace``; Phase 5 adds ``Connector``; Phase 8 adds ``Label`` and
+``Piece.label``. ``AssemblyStep`` comes in Phase 9.
 """
 
 from dataclasses import dataclass
 from typing import Literal
 
 from manifold3d import Manifold
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 
 Axis = Literal[0, 1, 2]
 """Axis index in the cutting frame: 0 = X, 1 = Y, 2 = Z."""
@@ -110,6 +110,8 @@ class Piece:
         body: The solid, mm, cutting frame; valid, with a positive volume (I1).
         face_ids: IDs of its cut faces, in face order (``cutting.cut_faces``).
         merged_from: IDs of the small pieces merged into it, in merge order (ADR-0012).
+        label: Its engraved ID (``labels.layout``), or ``None``: labels off, no cut face
+            (W008) or no room (W003).
     """
 
     id: str
@@ -117,6 +119,7 @@ class Piece:
     body: Manifold
     face_ids: list[str]
     merged_from: list[str]
+    label: "Label | None" = None
 
 
 @dataclass(frozen=True)
@@ -167,3 +170,23 @@ class Connector:
     pin_length: float
     hole_depth_neg: float
     hole_depth_pos: float
+
+
+@dataclass(frozen=True)
+class Label:
+    """A piece's ID, laid out on one of its cut faces (PLAN.md Phase 8, ADR-0009).
+
+    Built by ``labels.layout``; ``tools.apply`` engraves it.
+
+    Attributes:
+        text: The short ID, e.g. ``1-0-2b`` for ``X1-Y0-Z2-b`` (§4.3).
+        face_id: The cut face it is engraved on.
+        outline: The glyphs, plane-local (u, v), mm, with their counters as holes; already
+            mirrored in u on a pos piece's face, so the text reads correctly from outside.
+        height: Height of the text's bounding box before any rotation, mm.
+    """
+
+    text: str
+    face_id: str
+    outline: MultiPolygon
+    height: float

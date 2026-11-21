@@ -82,6 +82,25 @@ TEXT_PATH_SIZE = 100.0
 """Size at which glyphs are flattened into polylines before being scaled down to the text
 height. matplotlib flattens curves in path units, so at 4 mm a glyph's curves would be coarse."""
 
+LABEL_SEARCH_STEPS = 12
+"""Bisection steps of the label height between H_min and H_max (Phase 8, task 4)."""
+
+LABEL_ANCHOR_SLACK = 0.01
+"""How much clearance a label's anchor may give up to sit nearest the region's centroid, mm
+(r11). Above ``POLYLABEL_TOLERANCE``, so the points that tie with the polylabel point remain."""
+
+LABEL_MAX_ANCHORS = 256
+"""Positions tried per part of a label region when the text doesn't fit at its anchor (r11)."""
+
+LABEL_ANCHOR_GRID_DIVISOR = 2
+"""Those positions are on a grid of step H_min / this (2 mm by default; r11)."""
+
+LABEL_CHARACTERS = "0123456789-.abcdefghijklmnopqrstuvwxyz"
+"""What a label font must draw: piece labels (§4.3) and calibration codes (§6.3; r11)."""
+
+LABEL_ANGLES: tuple[float, ...] = (0.0, 90.0)
+"""Label rotations tried, degrees, in tie-break order: the first wins at equal height."""
+
 TOOL_OVERLAP = 0.01
 """Hole cutters reach this far past the cut face and pegs this far into it, mm (r10).
 

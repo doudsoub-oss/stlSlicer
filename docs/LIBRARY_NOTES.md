@@ -76,6 +76,7 @@ whose code will.
 | `apply_scale` and `repair.fix_winding` have no type annotations, so mypy's strict mode needs a `# type: ignore[no-untyped-call]` on those calls. | 5.2.1 | `io.load_stl`, `geometry._orient_faces` | — (mypy run) |
 | Binary STL export starts with an 80-byte zero header (no timestamp: determinism). | 5.2.1 | `io.write_stl_files`; ADR-0010 | `trimesh.stl_zero_header` |
 | `Scene.export(file_type="glb")` works when numpy, scipy and networkx are the only importable third-party packages (checked in a child process where every other installed package looks uninstalled). | 5.2.1 | `io` preview *(Phase 9)* | `trimesh.glb_export` |
+| `CrossSection.offset` with round joins draws corners as polygons with their **vertices** at delta, so their flats fall short (29 % at 0.5 mm with the default segments). Passing `circular_segments = n` and delta / cos(π/n) puts the flats at delta. | 3.5.5 | `geometry.grow`, `labels._unbacked` | `manifold.offset_round_flats` |
 
 ### shapely
 
@@ -94,6 +95,7 @@ whose code will.
 | Behaviour | Version | Used by | Spike check |
 |---|---|---|---|
 | `DejaVuSans-Bold.ttf` is bundled at `matplotlib.get_data_path()/fonts/ttf/`. The outer contours of `TextPath` glyphs are **clockwise**, so the Positive fill rule loses them: use EvenOdd (ADR-0009). | 3.11.2 | `io.resolve_label_font`; `labels.text_outline`; `geometry.crosssection_from_contours` | `matplotlib.font_and_glyph_winding` |
+| `FT2Font.get_char_index` returns 0 for a missing glyph (symbol fonts), and a placeholder font such as `LastResortHE-Regular.ttf` gives many characters the same index. Opening a file that isn't a font raises. | 3.11.2 | `io.check_label_font` | `matplotlib.font_glyph_indices` |
 
 ### Determinism
 

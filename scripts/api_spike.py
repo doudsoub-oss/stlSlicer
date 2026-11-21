@@ -28,6 +28,7 @@ import shapely
 import trimesh
 from manifold3d import CrossSection, Error, FillRule, JoinType, Manifold, Mesh, Mesh64, OpType
 from matplotlib.font_manager import FontProperties
+from matplotlib.ft2font import FT2Font
 from matplotlib.textpath import TextPath
 from shapely.geometry import Point, Polygon
 from shapely.ops import polylabel
@@ -642,6 +643,42 @@ def matplotlib_font_and_glyph_winding() -> None:
     positive = CrossSection(arrays, FillRule.Positive).area()
     expect(close(even_odd, abs(outer) - abs(counter)), "EvenOdd should give outer minus counter")
     expect(not close(positive, even_odd, 1e-3), "Positive should not give the glyph")
+
+
+@check("matplotlib.font_glyph_indices")
+def matplotlib_font_glyph_indices() -> None:
+    fonts = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+    characters = "0123456789-.abcdefghijklmnopqrstuvwxyz"
+    default = FT2Font(str(fonts / "DejaVuSans-Bold.ttf"))
+    glyphs = [default.get_char_index(ord(c)) for c in characters]
+    expect(0 not in glyphs and len(set(glyphs)) == len(glyphs), "one glyph per character")
+    symbol = FT2Font(str(fonts / "STIXSizOneSymBol.ttf"))
+    expect(any(symbol.get_char_index(ord(c)) == 0 for c in characters), "a missing glyph is 0")
+    placeholder = FT2Font(str(fonts / "LastResortHE-Regular.ttf"))
+    shared = {placeholder.get_char_index(ord(c)) for c in characters}
+    expect(len(shared) < len(characters), "a placeholder font shares its glyphs")
+    with tempfile.TemporaryDirectory() as folder:
+        fake = Path(folder) / "fake.ttf"
+        fake.write_bytes(b"hello")
+        try:
+            FT2Font(str(fake))
+        except (OSError, RuntimeError, ValueError):
+            return
+    expect(False, "a file that isn't a font should not open")
+
+
+@check("manifold.offset_round_flats")
+def manifold_offset_round_flats() -> None:
+    delta, segments = 2.0, 64
+    square = Polygon([(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)])
+    source = CrossSection.square((40.0, 40.0))
+
+    def gap(reach: float) -> float:
+        grown = source.offset(reach, JoinType.Round, circular_segments=segments)
+        return float(Polygon(grown.to_polygons()[0]).exterior.distance(square))
+
+    expect(gap(delta) < delta - 1e-3, "round corners should fall short of delta at their flats")
+    expect(close(gap(delta / np.cos(np.pi / segments)), delta, 1e-6), "compensated flats at delta")
 
 
 # --- determinism --------------------------------------------------------------------------

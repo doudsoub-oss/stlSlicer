@@ -86,8 +86,14 @@ All notable changes to this project are documented here. The format follows
 - `stlsplit --calibrate` writes the calibration kit to `calibration/`: a bar with one hole per
   clearance and its engraved code, the test pin, and a README on printing, testing and choosing
   a clearance.
+- Piece labels: each piece's short ID (`X1-Y0-Z2-b` reads `1-0-2b`) is engraved on one of its cut
+  faces, readable from outside and clear of the connectors, at the largest height that fits
+  (4 to 12 mm). A label never goes through a thin part of the piece. A piece with no room on any
+  face gets warning W003. `--dry-run` lists the labels, and `--no-label` turns them off.
 
 ### Changed
+- A run that draws text exits 1 when `advanced.label_font` isn't a font, or is a symbol or
+  placeholder font that can't draw the labels. A file that wasn't a font used to exit 4.
 - `advanced.pin_chamfer` must now be smaller than the pin's radius (exit 1 otherwise): a larger
   chamfer can't be built. With the default 0.5 mm, this rejects a pin diameter of 1 mm or less
   unless the chamfer is lowered too.

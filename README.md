@@ -97,6 +97,16 @@ will be horizontal, pick one step looser.
 TODO (Phase 9): `parts/`, `dowels/`, `assembly.json`, `assembly.md`, `preview_exploded.glb`
 (docs/OUTPUT_FORMAT.md).
 
+## Piece labels
+
+Each piece's ID is engraved on one of its cut faces, so it is hidden once the model is assembled.
+The label is the short form of the piece ID: its grid position along X, Y and Z, plus a letter
+when a cell holds several bodies. `X1-Y0-Z2-b` is engraved as `1-0-2b`.
+
+Labels read correctly when you look straight at the face, are 4 to 12 mm high depending on the
+room, and are 0.6 mm deep (`--label-depth`). A piece with no room for one gets warning W003 and
+no label. `--no-label` turns them off.
+
 ## Printing the dowels
 
 `dowels/` holds one STL per pin length, and the log says how many copies of each to print:

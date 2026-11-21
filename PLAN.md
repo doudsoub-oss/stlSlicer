@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r10** (2026-11-21); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r11** (2026-11-21); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -236,7 +236,7 @@ stlsplit/
 | `connectors` | Connector placement (2D candidates + 3D checks) | `geometry` |
 | `grid` | Usable volume, auto-orient, even grid, plane nudging | `geometry`, `connectors` (for `safe_region`) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` (r7) |
-| `labels` | Text outlines and layout on a face | `geometry` |
+| `labels` | Text outlines and layout on a face | `geometry`, `connectors` (`hole_solids`; r11) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (`hole_solids`), `grid` (`fits`) (r10) |
 | `calibrate` | Calibration kit | `tools`, `labels` |
 | `assembly` | Assembly order; JSON and Markdown content; preview scene | `models`, `config` |
@@ -506,6 +506,9 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 | ε_ray | Ray start offset inside a piece | constant `RAY_START_OFFSET` | 0.01 |
 | ε_tool | How far hole cutters and pegs reach past a cut face (r10) | constant `TOOL_OVERLAP` | 0.01 |
 | keep-out | Label keep-out radius around a connector | `r_h + ch_h + w` | 5.1 |
+| label backing | Material required behind a label, measured from the face (r11) | `t_lab + w` | 2.6 |
+| anchor slack | Clearance a label's anchor may give up to sit nearest the centroid (r11) | constant `LABEL_ANCHOR_SLACK` | 0.01 |
+| label positions | Fallback positions per region part, on a grid of step `H_min / LABEL_ANCHOR_GRID_DIVISOR` (r11) | constant `LABEL_MAX_ANCHORS` | 256, step 2 mm |
 | r_probe | Radius of the circle of depth rays and of the containment cylinder (r8) | `r_h + w` | 4.7 |
 | ray length | Length of the depth rays (r8) | `h(L_max) + w + RAY_LENGTH_MARGIN` (1 mm) | 13.5 |
 | T_max | Candidates of a face that go through the 3D checks at most (r8) | constant `MAX_CANDIDATE_TRIALS` | 256 |
@@ -648,7 +651,9 @@ the key.
   `nudge_window` ≥ 0; `nudge_step` > 0 and `nudge_window / nudge_step` ≤ 100 (r9);
   0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
   0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
-  ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
+  ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file and, in
+  any run that draws text (a split or dry run with labels on, or `--calibrate`), is a readable font
+  with its own glyph for each digit, `-`, `.` and a to z (r11).
 - Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config` (`--print-config` with
   `INPUT` or `--calibrate` is an error); `--dry-run` needs `INPUT`; `-o` present unless
   `--dry-run` or `--print-config` (with `--dry-run` it is accepted and ignored).
@@ -1535,12 +1540,16 @@ generate the calibration kit.
 **Goal.** Engrave each piece's short ID on one of its cut faces, readable from outside the piece and
 never touching a connector.
 
-**Files.** `labels.py`, `tests/unit/test_labels.py`, `tests/integration/test_labels.py`.
+**Files.** `labels.py`, `tests/unit/test_labels.py`, `tests/integration/test_labels.py`; also
+`models.py`, `config.py`, `geometry.py`, `tools.py`, `io.py`, `cli.py` and `scripts/api_spike.py`
+(r11).
 
 **Tasks.**
 1. Text: `X1-Y0-Z2-b` becomes `1-0-2b`.
 2. Region on each of the piece's faces: `region.buffer(−w)` minus a disk of radius keep-out around
-   every connector of that face. Choose the face with the largest region (ties: face ID).
+   every connector of that face, minus every point closer than w to a spot without `t_lab + w` of
+   material behind the face, holes counted (r11). Try the faces by decreasing region area (ties:
+   face ID) until the text fits (r11).
 3. Glyphs:
    - Use `TextPath` with the bundled `DejaVuSans-Bold.ttf`, loaded **by file path** so every
      machine uses the same font. At 4 mm text height the regular weight's strokes are 0.52 mm
@@ -1548,10 +1557,14 @@ never touching a connector.
    - Build the solid with `CrossSection(contours, FillRule.EvenOdd)`. The default Positive rule
      erased the glyph "0" entirely at plan time, because TrueType outer contours are clockwise.
 4. Layout:
-   - The anchor is the polylabel point of the largest part of the region.
+   - The anchor is the point of the largest part of the region that has the polylabel point's
+     clearance (within `LABEL_ANCHOR_SLACK`) and is nearest the part's centroid (r11).
    - Binary-search the text height between H_min and H_max (12 iterations), at 0° and 90°, accepting
      a size when `region.contains(text)`.
-   - Keep the largest height (0° on ties). If nothing fits: W003, no label.
+   - Keep the largest height (0° on ties).
+   - If H_min doesn't fit at the anchor, try each part of the region, largest first: its anchor,
+     then up to `LABEL_MAX_ANCHORS` grid points by distance to it, keeping the first that fits (r11).
+   - If nothing fits on any face: W003, no label.
 5. Orientation: faces of neg pieces are seen from +z (no mirroring), faces of pos pieces from −z
    (mirror in u).
 6. Solid: extrude to `labels.depth` into the piece, map it with the plane frame, and add it to the
@@ -1925,6 +1938,31 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r11 — 2026-11-21 (Phase 8).** Found while planning and implementing Phase 8, agreed with the
+maintainer:
+
+- **Material behind a label** (Phase 8, task 2; §6.1). The plan only checked the face in 2D. Where
+  a piece is thinner than the engraving, the text went through it, the counters of `0`, `8` and
+  `b` came off as separate shells and the run exited 4; the `tall_figure` fixture does this. A
+  label now needs `t_lab + w` of material behind it, holes counted, and stays w away from any
+  spot that lacks it.
+- **Next face before W003** (task 2). Only the largest region was tried, so a piece could get
+  W003 with room on a smaller face. Faces are now tried by decreasing area.
+- **Centred anchor** (task 4). On a long face every point of the middle line ties for the
+  polylabel point, and the library returns one near an end (a 100 × 8 face gets (4, 4)), so the
+  text ran off the face and all four pieces of `u_shape` got a false W003. The anchor is now the
+  point with that clearance (within `LABEL_ANCHOR_SLACK`) nearest the part's centroid.
+- **Fallback positions** (task 4). Found by the review: one anchor in one part still gave false
+  W003s. At a T junction the text overflows both arms (a T-beam got no label), and a thin largest
+  part hid a smaller one with room. When H_min doesn't fit at the anchor, each part tries up to
+  256 grid positions nearest its anchor; a label that fits at the anchor doesn't move.
+- **The wall is measured at the flats** (task 2). The round corners of the material guard had
+  their vertices at w, so their flats fell up to 29 % short of it. They are now compensated.
+- **`label_font` must be able to draw the labels** (§7.5). A file that wasn't a font exited 4, and
+  16 of matplotlib's 40 bundled fonts (symbols, Last Resort) exited 0 with unreadable text. Runs
+  that draw text now exit 1. `--print-config` and `--no-label` runs don't read the font's content.
+- **`labels` imports `connectors`** (§3.1), for `hole_solids`; no cycle.
 
 **r10 — 2026-11-21 (Phase 7).** Found while planning and implementing Phase 7, agreed with the
 maintainer:
