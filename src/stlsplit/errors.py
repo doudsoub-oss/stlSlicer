@@ -31,6 +31,8 @@ class ExitCode(IntEnum):
     """Partial success: at least one diagnostic of severity ``partial``."""
     INTERNAL = 4
     """Internal error (a bug)."""
+    INTERRUPTED = 130
+    """Stopped with Ctrl-C (128 + SIGINT, the shell convention; PLAN.md Appendix E, r14)."""
 
 
 class StlsplitError(Exception):

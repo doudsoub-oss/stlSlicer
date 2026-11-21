@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r12** (2026-11-21); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r14** (2026-11-21); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -72,8 +72,8 @@ what surprised you, what to watch.
 | 6 | Plane nudging | done | `e6bdb67` | For Phase 7: `cli._run` now runs `grid.nudge` between `grid.even_grid` and `cutting.cut`, then stops with a "not implemented yet (Phase 7 onwards)" warning: replace that stub with `tools.apply`. Cells are no longer all equal once a plane moves; everything downstream must take bounds from `grid.axis_bounds` / `grid.cell_bounds`, never `extent / n`. Plan changes in Appendix E r9: a plane stays strictly between its neighbours (`grid.check_fits` also asserts increasing bounds); `grid.cell_pairs` is shared by nudging and `cutting.cut_faces`; scoring calls `geometry.cut_region` and `clip_to_cells` with `ordered=False` (the polylabel sort was 97 % of the time: hollow sphere 4.9 s, now 0.11 s); scoring stops at the first (0, 0) score; `nudge_window / nudge_step` ≤ 100 (`MAX_NUDGE_STEPS`), with the window counted in steps (`derived(cfg).nudge_steps`); the example test command is now `tests/unit/test_nudge.py -k slack`. **The score is 2D**: moved just off a neck, a plane leaves a thin slab on the neck side, so `tall_figure` still gets W001 from the 3D checks (0.5 mm of box under the neck); a depth-aware score is a Phase 10 or v2 question (ADR-0003, "Consequences"). Performance: a 1M-triangle hollow sphere, where every position is scored (63), takes 2.1 s; at the 100-step limit one plane costs up to 201 scores, about 7 s at 1M triangles. The review found one bug (a tiny `nudge_step` overflowed, exit 4, or ran out of memory), fixed by the step limit and tested. |
 | 7 | Tool solids, booleans, dowels, calibration kit | done | `b760e4d` | For Phase 8: `cli._run` now runs `tools.apply` after `connectors.place`, writes `dowels/`, then stops with a "not implemented yet (Phase 8 onwards)" warning; the labels go between the placement and `tools.apply`, and their solids join the piece's one subtraction (`tools._apply_to_piece`, with their volume in `check_piece`). `labels.text_outline(text, height, font)` exists (centred, EvenOdd); `labels` can't import `io`, so the CLI passes the font path. **Any tool must reach `TOOL_OVERLAP` past a cut face**: its vertices can be a few ulps off the plane, and a peg based exactly on it stayed a separate shell (`manifold.face_float_noise`). For Phase 9: write `Applied.pieces` with `io.write_stl_files`, which refuses names outside `OWNED_OUTPUTS`. Final pieces fit `derived(cfg).printable` (bed − 2·margin), cells fit U (r10). The review added exit 1 refusals, agreed with the maintainer (Appendix E, r10): pin lengths sharing a file name, a kit that doesn't fit or whose walls fail, `diameter` ≥ 0.1. The review also found an older bug, fixed here: `--force` deleted an input inside an owned folder; `io.check_force_keeps` now refuses it (§7.6). |
 | 8 | Labels | done | `53624bc` | For Phase 9: `cli._run` now runs `labels.layout` after the placement and `tools.apply` engraves the labels, then stops with a "not implemented yet (Phase 9 onwards)" warning. `Applied.pieces` carry `Piece.label` (`text`, `face_id`, `outline`, `height`) for `assembly.json`; a piece can have none (W003, W008 or `--no-label`). Plan changes in Appendix E r11, all agreed with the maintainer: a label needs `labels.depth + min_wall` of material behind it (the literal spec made `tall_figure` exit 4); faces, then up to 256 positions per region part, are tried before W003; the anchor is centred on long faces (`u_shape` and a T-beam got false W003s); the guard's round corners are compensated; a run that draws text refuses a font that can't draw the labels (exit 1), while `--print-config` and `--no-label` don't read its content. `labels` imports `connectors`. Thin shells get W003 by design: a 2 mm hollow sphere has no label, since its wall is under the 2.6 mm backing. Checked after the review: 276 runs on 69 models (dowel, peg, none, depth 1.9) with no label-related exit 4. |
-| 9 | Assembly order, export, assembly map, preview | done | `e6cbbbe` | For Phase 10: `cli._run` is complete, with no stub left: the assembly order runs in a split and a dry run, then a split encodes every output before `io.prepare_output_dir` and writes them with `io.write_outputs`. Plan changes in Appendix E r12, agreed with the maintainer: plane-by-plane join rule (plain face order could need +X and -X in one step, `crossed_loop`), W013 and `AssemblyStep.clear_path`, exported pieces tested against the printable volume, plain-text troubleshooting references, `assembly` imports `geometry` and `errors`, `label_font` stored as a file name. The review found three gaps, fixed: the greedy order reported a false W013 (now a bounded search with backtracking, `hooked_strips`), a dry run exited 0 where the split exited 3 (both now check `tools.with_pegs`), and the docs overstated failure safety. Three older tests relied on the Phase 8 stub and now assert a real W006 or the exact folder listing. Open for Phase 10: a failure during the write itself (full disk) with `--force` loses the old outputs, since §7.6 doesn't require an atomic swap (the maintainer's choice); a 10 mm cube with `--scale 0.001` exits 4 on I3 in the cutting stage (N3); an input name that isn't valid UTF-8 exits 1 because of `trimesh.load` (LIBRARY_NOTES). Checked: 207 CLI runs on 23 models (dowel, peg, none), no exit 4, schema failure, leaky STL or W013. |
-| 10 | Robustness and performance | todo | | |
+| 9 | Assembly order, export, assembly map, preview | done | `e6cbbbe` | For Phase 10: `cli._run` is complete, with no stub left: the assembly order runs in a split and a dry run, then a split encodes every output before `io.prepare_output_dir` and writes them with `io.write_outputs`. Plan changes in Appendix E r12, agreed with the maintainer: plane-by-plane join rule (plain face order could need +X and -X in one step, `crossed_loop`), W013 and `AssemblyStep.clear_path`, exported pieces tested against the printable volume, plain-text troubleshooting references, `assembly` imports `geometry` and `errors`, `label_font` stored as a file name. The review found three gaps, fixed: the greedy order reported a false W013 (now a bounded search with backtracking, `hooked_strips`), a dry run exited 0 where the split exited 3 (both now check `tools.with_pegs`), and the docs overstated failure safety. Three older tests relied on the Phase 8 stub and now assert a real W006 or the exact folder listing. Open for Phase 10: a 10 mm cube with `--scale 0.001` exits 4 on I3 in the cutting stage (N3); an input name that isn't valid UTF-8 exits 1 because of `trimesh.load` (LIBRARY_NOTES). Checked: 207 CLI runs on 23 models (dowel, peg, none), no exit 4, schema failure, leaky STL or W013. |
+| 10 | Robustness and performance | done | `25bcef5`, `894a784` | For Phase 11: performance needed no optimization for the target: 1M triangles in 11 s and 2M in 20 s on a 4-core laptop (up to 27 s and 49 s while it was busy), with no real scan timed yet. The one slow path fixed was a face where no pin fits with many standard lengths (over 200 s to about 2 s). Plan changes in Appendix E r14: limits of 1000 cells and 5e9 mm, a piece too small to record exits 1, exit 130, the entry point is `stlsplit.__main__:run` (rerun `pip install -e .`). The review found that Ctrl-C during the swap of `25bcef5` could delete previous outputs, now fixed. Still open: connector candidates use memory in proportion to the face area, so a bed of several metres can run out (a 3 m cube on a 1.8 m bed took 670 MB) and a native library can then crash instead of exiting 1; a 900-cell model takes 15 minutes, 84 % of it in connector placement; Ctrl-C in the first 0.1 s of startup still shows Python's traceback. |
 | 11 | End-to-end suite, docs completion, v1.0 and handover | todo | | |
 
 ---
@@ -315,6 +315,9 @@ absorbed IDs in `merged_from`.
 | 2 | The mesh can't be repaired into a valid solid. |
 | 3 | Partial success: at least one diagnostic of severity `partial`. |
 | 4 | Internal error (a bug). The message asks for a report with the `-v` output. |
+| 130 | Stopped with Ctrl-C (r14). |
+
+Running out of memory exits 1 with a suggestion, since it isn't a bug (r14).
 
 Diagnostics live in a registry in `errors.py` and are documented in `docs/TROUBLESHOOTING.md`
 (a test keeps the two in sync). Codes are never reused or renumbered; retired codes stay listed as
@@ -366,7 +369,7 @@ tools.apply                    hole, peg and label solids; one batched boolean p
   ▼
 assembly.plan_steps            stage 1: X joins (rows) → stage 2: Y joins (layers) → stage 3: Z joins
   ▼
-io.write_outputs               parts/*.stl, dowels/*.stl, assembly.json, assembly.md, preview_exploded.glb
+io.publish_outputs             parts/*.stl, dowels/*.stl, assembly.json, assembly.md, preview_exploded.glb
 ```
 
 The implementation phases (§10) don't follow this order exactly. Nudging is built in Phase 6, after
@@ -572,6 +575,8 @@ engraving that would reach a hole, and holes that would touch (r10).
 | Calibration | `stlsplit --calibrate -o DIR [connector options]` | yes | 0, 1 or 4 |
 | Show config | `stlsplit --print-config [--config FILE] [options]` | no | 0 or 1 |
 
+Any mode exits 130 when stopped with Ctrl-C (r14).
+
 The dry run goes through every step up to connector placement and label layout, then plans the
 assembly order so that it reports W013 and exits as a split would (r12), skipping the tool
 booleans and file writing. It prints the orientation, grid, planes, pieces, faces, connectors, pin
@@ -645,6 +650,9 @@ the key.
 - Every number is finite (TOML accepts `inf` and `nan`), and integers fit in 64 bits.
 - `bed`: three values > 0. `margin` ≥ 0 and `2·margin` < the smallest bed dimension.
 - `scale` > 0. `simplify` ≥ 0.
+- After `--scale`, every coordinate is within 5e9 mm (`MAX_COORDINATE`), and the model needs at
+  most 1000 grid cells (`MAX_GRID_CELLS`), and no piece's volume rounds to 0 at 6 decimals
+  (under 5e-7 mm³, which `assembly.json` can't record) (r14).
 - `diameter` ≥ 0.1 (r10), `clearance` ≥ 0, `min_wall` > 0, `max_per_face` ≥ 1.
 - `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin), and
   `length` ≤ max(bed X, bed Y): pins are printed lying down (r8).
@@ -671,6 +679,12 @@ the key.
   `preview_exploded.glb`, and keep everything else. Never delete DIR itself. A symlink with one of
   those names is unlinked, never followed. If that would delete a file the run reads (the input,
   the `--config` file or the label font), exit 1 before any work (r10).
+- **All or nothing (r13).** A run writes its files to `.stlsplit-staging/` inside DIR, swaps them in
+  by renames, then deletes the outputs they replace. If writing or swapping fails, the previous
+  outputs stay. If even undoing a swap fails, they are in `.stlsplit-staging/old`, the message says
+  so, and `--force` refuses to run until that folder is dealt with. A leftover staging folder
+  without old outputs is cleared by `--force`, unless it holds a file the run reads. Ctrl-C has
+  no effect during the swap and the deletion of the old outputs (r14).
 - The list of owned names is a single constant in `io.py`, used by both the writer and `--force`.
 
 ### 7.7 Example configuration (`my_printer.toml`)
@@ -1950,8 +1964,49 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `crossed_loop` | One closed loop crossing x = 25 four times, two bodies on each side, one plate in the other's way along X | Assembly order within a plane (r12) |
 | `hooked_strips` | Three strips on each side of x = 10, woven into one solid, a hook of the third behind the first | The order search must backtrack (r12) |
 | `interlocked_bodies` | Two bodies below x = 10, each in the other's way along X, held by a block above | W013, in a split and a dry run (r12) |
+| `many_bodies` | 125 separate 30 mm cubes on a 70 mm lattice | 100+ bodies, suffixes past `-z`, W001 on 15 mm corners (r14) |
+| `thin_plate` | 400 × 100 × 0.2 mm plate | Very thin features, W001 (r14) |
+| `finned_block` | 300 × 60 × 60 block with a 0.05 mm fin across the cut | Very thin features (r14) |
+| `slit_block` | 400 × 100 × 100 block with thin internal slits behind its cut | No pin length fits: the search stays fast (r14) |
+| `refined_sphere_union(triangles)` | Eight overlapping spheres r = 100 on a 150 mm lattice | Performance at 1M and 2M triangles (r14) |
 
 ## Appendix E — Plan revisions
+
+**r14 — 2026-11-21 (Phase 10).** Agreed with the maintainer in the Phase 10 plan:
+
+- **Cell limit** (§7.5): more than 1000 grid cells exits 1. Without a limit, a wrong `--scale` hung
+  or exhausted memory, since the cells are built in memory.
+- **Exit 130** (§4.5) for Ctrl-C, which used to print a traceback. **Out of memory** exits 1 with a
+  suggestion instead of being reported as a bug.
+
+Found while measuring, in the same spirit:
+
+- **Coordinate limit** (§7.5): coordinates beyond 5e9 mm after `--scale` exit 1. A model 2e10 mm
+  wide exited 4 ("Values exceed permitted range" from manifold3d's 2D sections), and from about
+  `--scale 1e100` trimesh's mass properties overflowed, ending in a misleading repair error.
+- **Ctrl-C** is ignored during the final swap (§7.6): the review reproduced it deleting previous
+  outputs (r13's undo missed a rename that had just completed). During the imports it is noted and
+  reported after them, so the entry point is now `stlsplit.__main__:run`.
+- **Debris threshold:** at most 1e-6 of the model's volume, so a tiny model isn't dropped as debris
+  of itself (the exit 4 of a 10 mm cube at `--scale 0.001`). Models of 1 mm³ or more are unchanged.
+- **Pieces too small to record** exit 1, agreed with the maintainer after the review: a piece under
+  5e-7 mm³ rounded to a volume of 0, which the `assembly.json` schema rejects. The schema is
+  unchanged.
+- **Closed pipes:** a closed stdout exits 1 on one line; a closed stderr keeps the exit code
+  (Python's flush at exit turned it into 120).
+- **The limit is checked by `grid.check_cell_limit`**, called by the CLI, and not inside
+  `grid.even_grid` as first planned: the grid's property tests use up to 10⁴ cells per axis.
+- **The 125-body test expects exit 3**, not the 0 first planned: eight 15 mm corner blocks have no
+  room for three perpendicular sets of holes, so W001 is correct.
+
+**r13 — 2026-11-21 (Phase 10).** Agreed with the maintainer after the Phase 9 review:
+
+- **All-or-nothing output** (§7.6). `--force` deleted the old outputs before writing the new ones,
+  so a full disk lost both: a real run with a file-size limit left one truncated `assembly.json`
+  of the 8 files. A run now writes to a staging folder, swaps by renames, undoes them on failure,
+  and deletes the old outputs last. The disk needs room for both versions for a moment.
+- **Old outputs are never deleted blindly.** If a swap can't be undone, the old outputs stay in
+  `.stlsplit-staging/old`, and `--force` refuses to run until the user has dealt with them.
 
 **r12 — 2026-11-21 (Phase 9).** Found while planning and implementing Phase 9, agreed with the
 maintainer:

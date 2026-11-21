@@ -9,6 +9,7 @@ reversed winding, unmerged) can't be a valid ``Manifold``, so they are built as
 ``trimesh.Trimesh`` with ``process=False``, which keeps them exactly as constructed.
 """
 
+import math
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -415,6 +416,76 @@ def tall_figure(
         for bottom, top in necks
     ]
     return Manifold.batch_boolean(parts, OpType.Add)
+
+
+def many_bodies() -> Manifold:
+    """125 separate 30 mm cubes on a 70 mm lattice, 310 mm wide (Phase 10).
+
+    The default bed cuts it at 155 mm along each axis, through the middle layer of cubes: 216
+    pieces, 27 of them in each cell, so piece suffixes go past ``-z`` to ``-aa``. The eight
+    15 mm cubes around the centre have no room for three perpendicular sets of holes: W001.
+    """
+    return Manifold.compose(
+        [
+            Manifold.cube((30.0, 30.0, 30.0)).translate((70.0 * i, 70.0 * j, 70.0 * k))
+            for i in range(5)
+            for j in range(5)
+            for k in range(5)
+        ]
+    )
+
+
+def thin_plate() -> Manifold:
+    """A 400 × 100 × 0.2 mm plate: cut across, its faces are too thin for a connector."""
+    return Manifold.cube((400.0, 100.0, 0.2))
+
+
+def finned_block() -> Manifold:
+    """A 300 × 60 × 60 block with a 0.05 mm fin on top that crosses the cut at x = 150."""
+    fin = Manifold.cube((200.0, 0.05, 40.0)).translate((50.0, 30.0, 59.0))
+    return Manifold.cube((300.0, 60.0, 60.0)) + fin
+
+
+SLIT_BLOCK_CUT = 200.0
+"""Where the default bed cuts ``slit_block`` along X, mm."""
+
+
+def slit_block() -> Manifold:
+    """A 400 × 100 × 100 block with thin internal slits just behind its cut (Phase 10).
+
+    The cut face is whole, and the depth rays mostly pass between the slits (0.02 mm thick,
+    7 mm apart), but every 9.4 mm containment cylinder crosses one, so no pin length fits.
+    """
+    slits = [
+        Manifold.cube((140.0, 0.02, 96.0)).translate((SLIT_BLOCK_CUT + 1.0, 3.5 + 7.0 * k, 2.0))
+        for k in range(14)
+    ]
+    return Manifold.cube((400.0, 100.0, 100.0)) - Manifold.batch_boolean(slits, OpType.Add)
+
+
+SPHERE_UNION_TRIANGLES_PER_SQUARED_SEGMENT = 2.475
+"""Triangles of ``refined_sphere_union`` per squared segment count, measured at 636 and 900."""
+
+
+def refined_sphere_union(triangles: int) -> Manifold:
+    """Eight overlapping spheres r = 100 on a 150 mm lattice (Phase 10, performance).
+
+    350 mm wide, so the default bed cuts it into 2 × 2 × 2 pieces.
+
+    Args:
+        triangles: About how many triangles the union should have.
+    """
+    root = math.sqrt(triangles / SPHERE_UNION_TRIANGLES_PER_SQUARED_SEGMENT)
+    segments = 4 * math.ceil(root / 4)  # manifold3d rounds sphere segments to a multiple of 4
+    spheres = [
+        Manifold.sphere(100.0, segments).translate(
+            (100.0 + 150.0 * i, 100.0 + 150.0 * j, 100.0 + 150.0 * k)
+        )
+        for i in range(2)
+        for j in range(2)
+        for k in range(2)
+    ]
+    return Manifold.batch_boolean(spheres, OpType.Add)
 
 
 # --- Meshes that need normalization or repair ---------------------------------------------------

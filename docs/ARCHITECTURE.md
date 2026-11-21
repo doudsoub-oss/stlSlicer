@@ -9,7 +9,7 @@ choices are in the [ADRs](adr/README.md); the numbers are in PLAN.md §6 and `co
 input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid → grid.nudge
   → cutting.split_cells → cutting.cut_faces → cutting.merge_small_pieces → connectors.place
   → labels.layout → tools.apply → assembly.plan_steps → assembly.build_document
-  → io.encode_stl / io.encode_preview → io.prepare_output_dir → io.write_outputs
+  → io.encode_stl / io.encode_preview → io.publish_outputs
 ```
 
 ## Module map
@@ -31,7 +31,7 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ |
 | `calibrate` | Calibration kit | `tools`, `labels` | ✓ |
 | `assembly` | Assembly order; JSON and Markdown; preview layout | `models`, `config`, `errors`, `geometry` (r12) | ✓ |
-| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, encoding and writing every output) |
+| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, encoding every output, publishing them all or nothing) |
 | `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
@@ -84,7 +84,7 @@ repair.prepare ──▶ Manifold (input frame) + RepairReport
   the counts of bodies, voids and shells turned the right way out, the diagnostics, and
   `reference_volume`: the volume of the returned body, measured after `--simplify`, the
   reference of I3.
-- **Order in the CLI.** Load and repair run before `io.prepare_output_dir`, so an input that
+- **Order in the CLI.** Load and repair run before `io.publish_outputs`, so an input that
   fails (exit 1 or 2) never creates the output directory, and `--force` never deletes the
   previous outputs for it. Each stage's diagnostics are logged as soon as it returns, so W006
   still shows when repair then fails. The summary line, at info level:
@@ -186,8 +186,7 @@ Applied: new pieces (same order) + pin groups (tools.pin_groups, longest first)
   ▼
 cli: assembly order, then the outputs (see Outputs)
 
---calibrate:  calibrate.build_kit(cfg, font) → io.prepare_output_dir
-              → io.write_stl_files + io.write_text_file (calibration/)
+--calibrate:  calibrate.build_kit(cfg, font) → io.encode_stl → io.publish_outputs (calibration/)
 ```
 
 - The tools run before the output directory is prepared, so a failure keeps the previous outputs.
@@ -210,12 +209,13 @@ Applied pieces + faces + connectors
   │  assembly.preview_items    offsets and colours (pure)
   │  io.encode_stl, encode_preview      bytes of every file
   ▼
-io.prepare_output_dir → io.write_outputs
+io.publish_outputs     write to .stlsplit-staging/new → swap by renames → delete the old outputs
 ```
 
-- Everything is encoded **before** the output directory is prepared, so a failure up to that
-  point keeps the previous outputs. A failure during the write itself (a full disk) can leave a
-  partial folder, and with `--force` the old outputs are already gone by then.
+- Everything is encoded **before** the output directory is touched, and `io.publish_outputs` is
+  all or nothing (PLAN.md §7.6, r13): a failure at any stage, a full disk included, keeps the
+  previous outputs. If a swap fails and can't be undone, they are in `.stlsplit-staging/old`, and
+  `--force` refuses to run until that folder is dealt with.
 - A dry run also plans the order, on the same solids (`tools.with_pegs`), so it reports W013 and
   exits as a split would (PLAN.md §7.1).
 - `assembly` stays pure: the CLI converts solids with `geometry.to_trimesh`, and only `io` builds
@@ -295,11 +295,14 @@ are documented in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 - **Failures** are exceptions: `InputError` (exit 1, `ConfigError` for a bad key or value),
   `RepairError` (exit 2, raised by `repair.prepare`). `cli.main` prints each as one line, `stlsplit: error: …`, plus the
-  traceback with `-v`. Any other exception is a bug: exit 4 and a request for a report.
+  traceback with `-v`. Ctrl-C exits 130, running out of memory exits 1, and a closed stdout
+  exits 1 (a closed stderr doesn't change the exit code). Any other exception is a bug: exit 4
+  and a request for a report.
 - **Diagnostics** don't stop the run. A stage builds them with `errors.diagnostic(code,
   message, refs)`, which takes the severity from the registry, and returns them with its
   result (stages stay pure). `cli.report_diagnostics` logs them in order and returns
   `errors.exit_code_for(...)`: 3 if any is `partial`, else 0. The CLI calls it after each
   stage and keeps the highest code.
 - **Logging:** the `stlsplit` logger writes to stderr; `-q` shows warnings and errors, the
-  default adds info, `-v` adds debug messages and the stage timings from `cli.stage(name)`.
+  default adds info, `-v` adds debug messages and the stage timings from `cli.stage(name)`,
+  including the stage that failed and a `total` line.

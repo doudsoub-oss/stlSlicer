@@ -32,8 +32,8 @@ from manifold3d import Manifold
 from shapely.geometry import Polygon
 
 from stlsplit import config, connectors, geometry
-from stlsplit.config import GRID_TOLERANCE, Config
-from stlsplit.errors import diagnostic
+from stlsplit.config import GRID_TOLERANCE, MAX_GRID_CELLS, Config
+from stlsplit.errors import InputError, diagnostic
 from stlsplit.models import Axis, Diagnostic, Grid, Orientation, Plane
 
 LOGGER = logging.getLogger(__name__)
@@ -209,6 +209,26 @@ def orient(body: Manifold, cfg: Config) -> tuple[Manifold, Orientation]:
     usable = config.derived(cfg).usable
     rotation = choose_rotation(extent(body), usable, cfg.model.auto_orient)
     return to_cutting_frame(body, rotation)
+
+
+def check_cell_limit(extent: Vec3, usable: Vec3) -> None:
+    """Refuse a grid of more than ``MAX_GRID_CELLS`` cells, before anything is built (§7.5).
+
+    Args:
+        extent: Model size per axis in the cutting frame, mm.
+        usable: U per axis, mm (``config.derived(cfg).usable``).
+
+    Raises:
+        InputError: The model needs more cells than the limit, usually a wrong ``--scale``.
+    """
+    counts = [cell_count(e, u) for e, u in zip(extent, usable, strict=True)]
+    total = math.prod(counts)
+    if total > MAX_GRID_CELLS:
+        raise InputError(
+            f"the model needs {total} cells ({' x '.join(str(n) for n in counts)}) on this bed, "
+            f"over the limit of {MAX_GRID_CELLS}: check --scale (STL has no units and is read "
+            "as mm) or use a larger --bed"
+        )
 
 
 def even_grid(extent: Vec3, usable: Vec3) -> tuple[Grid, tuple[Diagnostic, ...]]:

@@ -93,12 +93,21 @@ All notable changes to this project are documented here. The format follows
 - A split now writes every output: `parts/*.stl` (binary, in the model's frame),
   `assembly.json` (schema version 1), `assembly.md` (print list and steps by stage),
   `preview_exploded.glb` (`--no-preview` skips it) and a final summary with the exit code. Two
-  runs give byte-identical folders, and a failure before the writing starts keeps the previous
-  outputs.
+  runs give byte-identical folders.
 - Assembly order: X joins, then Y, then Z, each join one straight move along its pins. New
   diagnostic W013 (exit 3) for a move that can't be shown to have a clear path.
 
+- `-v` also shows the time of the stage that failed, and the total time.
+- Ctrl-C stops a run with one line and exit code 130.
+
 ### Changed
+- A model that would need more than 1000 grid cells, or a `--scale` that puts coordinates beyond
+  5e9 mm, exits 1 at once with a message naming `--scale`. These runs used to hang, exit 4 or end
+  in a misleading repair error.
+- Running out of memory exits 1 with a suggestion, instead of being reported as a bug.
+- Replacing the outputs is all or nothing, for a split and `--calibrate`: files are prepared in a
+  staging folder and swapped in at the end, so a failed run, a full disk included, keeps the
+  previous outputs. `--force` used to delete them first.
 - A run that draws text exits 1 when `advanced.label_font` isn't a font, or is a symbol or
   placeholder font that can't draw the labels. A file that wasn't a font used to exit 4.
 - `advanced.pin_chamfer` must now be smaller than the pin's radius (exit 1 otherwise): a larger
@@ -114,3 +123,12 @@ All notable changes to this project are documented here. The format follows
 - `--force` could delete the file it was reading: `stlsplit out/parts/model.stl -o out --force`
   removed the input with `parts/`. It now exits 1 before any work when the input, the `--config`
   file or a custom label font lies inside an output it would delete.
+- A very small model (a 10 mm cube at `--scale 0.001`) no longer exits 4: it was dropped as debris.
+  A model with a piece under 5e-7 mm³, too small for `assembly.json` to record, exits 1.
+- An input file name that isn't valid UTF-8 now works. It is recorded with the invalid bytes
+  escaped.
+- `--dry-run | head` no longer reports an internal error, and a closed stderr no longer changes
+  the exit code, including when a stream is closed from the start.
+- Ctrl-C during the final swap could delete previous outputs. The swap now finishes first.
+- A face where no pin fits no longer tries every standard length at every position: with a 60 mm
+  pin and a 0.1 mm step, one such face went from over 200 s to about 2 s. Results are unchanged.

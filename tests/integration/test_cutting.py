@@ -17,6 +17,7 @@ from manifold3d import Error, Manifold
 
 from stlsplit import config, cutting, geometry, grid
 from stlsplit.config import MERGE_MARGIN, Config
+from stlsplit.errors import InputError
 from stlsplit.models import Grid, Piece, Plane
 from tests.conftest import (
     KNOB_PLANES,
@@ -565,3 +566,30 @@ def test_cutting_twice_gives_identical_ids_volumes_and_faces() -> None:
     assert summary(run(body, even(body, (90.0, 160.0, 40.0)))) == summary(
         run(oriented(torus()), even(body, (90.0, 160.0, 40.0)))
     )
+
+
+# --- very small models (Phase 10) --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("size", [0.01, 1e-3, 1e-5])
+def test_a_tiny_body_is_not_mistaken_for_debris(size: float) -> None:
+    body = cube(size)
+    pieces = cutting.split_cells(body, even(body, (210.0, 210.0, 240.0)))
+    assert [piece.id for piece in pieces] == ["X0-Y0-Z0"]
+    assert pieces[0].body.volume() == pytest.approx(body.volume())
+
+
+def test_a_piece_whose_volume_would_round_to_zero_is_refused() -> None:
+    recordable = cube(0.01)  # 1e-6 mm³ rounds to 0.000001
+    assert cutting.cut(recordable, even(recordable, (210.0, 210.0, 240.0)), make(), 1e-6).pieces
+    tiny = cube(1e-3)  # 1e-9 mm³ rounds to 0
+    with pytest.raises(InputError, match="--scale"):
+        cutting.cut(tiny, even(tiny, (210.0, 210.0, 240.0)), make(), tiny.volume())
+
+
+def test_debris_of_a_normal_body_is_still_dropped() -> None:
+    speck = Manifold.cube((1e-3, 1e-3, 1e-3)).translate((5.0, 20.0, 5.0))  # 1e-9 mm³
+    body = Manifold.compose([cube(10.0), speck])
+    pieces = cutting.split_cells(body, even(body, (210.0, 210.0, 240.0)))
+    assert len(pieces) == 1
+    assert pieces[0].body.volume() == pytest.approx(1000.0)

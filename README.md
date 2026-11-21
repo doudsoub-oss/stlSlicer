@@ -4,9 +4,9 @@ Split an STL model that is too big for your printer into pieces that each fit th
 with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
 assembly map telling you which piece goes where.
 
-> **Status:** under development (Phase 9 of PLAN.md). A split writes every output: the pieces,
-> the dowels, the assembly map and a 3D preview. Robustness, performance and the final
-> documentation come in Phases 10 and 11. Sections marked TODO are filled in as they land.
+> **Status:** under development (Phase 10 of PLAN.md). A split writes every output: the pieces,
+> the dowels, the assembly map and a 3D preview. The final documentation and the v1.0 release
+> come in Phase 11. Sections marked TODO are filled in as they land.
 
 ```bash
 stlsplit model.stl -o ./out --bed 220 220 250
@@ -167,7 +167,25 @@ TODO (Phase 11). By design: axis-aligned cuts only, no hollowing, no dovetails o
 
 ## Performance
 
-TODO (Phase 10): measured times.
+The target is under 2 minutes for a 1–2M-triangle model cut into about 8 pieces. Measured on a
+laptop with an Intel Core i5-1035G1 (4 cores, 8 threads, up to 3.6 GHz) and 16 GB of RAM, on Linux
+with Python 3.13 and manifold3d 3.5.5, for a full split with every output:
+
+| Model | Triangles | Pieces | Cut faces | Connectors | Time | Peak memory |
+|---|---|---|---|---|---|---|
+| Eight overlapping spheres | 998,688 | 8 | 12 | 48 | 11 s | 1.1 GB |
+| Eight overlapping spheres | 1,989,024 | 8 | 12 | 48 | 20 s | 2.0 GB |
+| 2 m cube (the largest grid class) | 12 | 900 | 2,420 | 9,680 | 15 min | not measured |
+
+The sphere times are the median of three runs. While the laptop was busy with other work, the
+same two models took up to 27 s and 49 s. These models are synthetic: no real scan has been timed.
+
+At 2M triangles the time is spread out: load, labels and cutting take about 4 s each, and repair,
+export, connectors and tools about 2 s each, so no stage needed optimizing or running in parallel.
+With hundreds of pieces, connector placement dominates (84 % of the 2 m cube's time), at about
+0.3 s per large cut face. A model that needs more than 1000 grid cells is refused.
+
+`-v` prints the time of each stage. To rerun the measurement: `pytest -m slow --no-cov -s`.
 
 ## Real test print
 

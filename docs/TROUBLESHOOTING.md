@@ -30,12 +30,19 @@ Common cases:
 | `advanced.label_font: can't read FILE as a font` | The file exists but isn't a font | Use the default `DejaVuSans-Bold.ttf` or a real TrueType font |
 | `advanced.label_font: FONT has no glyph for these characters`, or `draws several of these characters with the same glyph` | A symbol or placeholder font: its labels would be unreadable | Use a text font with digits, `-`, `.` and a to z |
 | `INPUT model.stl: no such file` | The input path is wrong | Check the path |
+| `can't write FILE`, or `can't replace the outputs in DIR ...; the previous outputs were kept` | A full disk, missing permissions, or (on Windows) an output file open in another program, such as a slicer | Free some space or close the program, then run again. Your previous outputs are unchanged |
+| `DIR/.stlsplit-staging/old holds outputs of an earlier run that didn't finish` | A run was killed during the final swap, or couldn't undo it | Move what you need out of that folder, delete `.stlsplit-staging`, then run again |
 | `INPUT model.stl: no triangles found` | The file is empty, isn't an STL, or is an STL without facets | Export the model again as STL |
 | `--simplify (model.simplify): a tolerance of 1000 mm removed the whole model` | The `--simplify` tolerance is as large as the model | Use a much smaller tolerance (a few hundredths of a mm is typical), or none |
 | `INPUT model.stl: can't read it as an STL file` | The file is damaged, e.g. a binary STL cut short during a download or copy | Export or download it again |
 | `output directory out is not empty` | stlsplit refuses to mix its outputs with existing files | Use an empty directory, or add `--force`: it replaces only stlsplit's own outputs and keeps everything else |
 | `--force would delete FILE, which this run reads` | The input, the `--config` file or the label font lies inside one of stlsplit's own outputs (`parts/`, `dowels/`, `calibration/`, …), which `--force` deletes | Move the file out of it, or choose another `-o DIR` |
 | `output directory out exists and is not a directory` | `-o` points to a file | Choose another path |
+| `the model needs N cells (… ) on this bed, over the limit of 1000` | The model would be cut into more than 1000 cells, usually because of a wrong unit | Check the size in the `model:` line and fix `--scale`, or use a larger `--bed` |
+| `--scale (model.scale): … puts the model's coordinates at … mm, over the limit of 5e+09 mm` | The scale is far too large for the model | Use a smaller `--scale` |
+| `piece … is … mm^3, too small to record or print` | A piece is under 5e-7 mm³, usually because of a wrong unit | Check the size in the `model:` line and fix `--scale` |
+| `out of memory on this model` | The model doesn't fit in this machine's memory. Dense meshes and very large cut faces (a bed of several metres) use the most | Close other programs, use `--simplify` with a small tolerance for a dense mesh, or a smaller `--bed` for very large faces. The system or a library can also end the process without this message |
+| `can't write to standard output` | The program reading the plan stopped early, for example a `--dry-run` piped into `head` | Nothing is wrong with the model. Send the plan to a file to read all of it |
 
 ### 2 — Mesh can't be repaired
 The mesh isn't a closed solid, and the repairs stlsplit is allowed to make didn't fix it.
@@ -75,6 +82,10 @@ the diagnostics before printing.
 
 ### 4 — Internal error
 A bug. Please report it with the full output of the same command run with `-v`.
+
+### 130 — Interrupted
+You stopped the run with Ctrl-C, and your previous outputs are kept. Ctrl-C has no effect during
+the final swap, which takes a moment: the run then finishes normally with the new outputs.
 
 ## Diagnostic codes
 
@@ -213,4 +224,22 @@ run exits 3.
 
 ## Common problems
 
-TODO (Phase 11)
+**The model comes out far too big or too small.** STL has no units and stlsplit reads it as
+millimetres. Check the size in the `model:` line, then use `--scale 25.4` for inches or
+`--scale 1000` for metres. `--dry-run` shows the grid without writing anything.
+
+**A run takes a long time.** With many pieces, time grows with the number of cut faces: about
+0.4 s per large face on a laptop, so a 2 m cube cut into 900 pieces (2420 faces) takes 15 minutes.
+Add `-v` to see the time of each stage. A larger `--bed`, or fewer pieces, helps most. For a very
+dense mesh, `--simplify` with a small tolerance shortens the stages that depend on triangles.
+
+**Every face reports W001 on a hollow or thin model.** A face needs about 10 mm of width for a
+5 mm pin. Thin shells can't hold one, so the pieces are written without connectors and the run
+exits 3: glue them, or use a smaller `--dowel-diameter` and `--min-wall`.
+
+**Small blocks report W001 where three cuts meet.** A block about 15 mm wide has no room for
+holes from three perpendicular faces. The other faces keep their connectors; glue this one.
+
+**A pipe cuts the output short.** `stlsplit … --dry-run | head` exits 1, because the plan couldn't
+be written in full. Logs piped away (`2>&1 | head`) don't affect a split, which still writes its
+files and keeps its exit code.

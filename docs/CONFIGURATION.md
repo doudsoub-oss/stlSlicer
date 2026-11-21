@@ -22,6 +22,8 @@ stlsplit --print-config --config my_printer.toml         # show the effective se
 | Calibration | `stlsplit --calibrate -o DIR [connector options]` | yes | 0, 1 or 4 |
 | Show config | `stlsplit --print-config [--config FILE] [options]` | no | 0 or 1 |
 
+Any mode exits 130 when stopped with Ctrl-C.
+
 These combinations are refused with exit code 1, before anything is read or written:
 
 - no `INPUT`, no `--calibrate` and no `--print-config`;
@@ -104,7 +106,7 @@ mark; UTF-16 with a byte order mark (what PowerShell 5.1's `>` writes) is accept
 | `--print-config` | — | off | — | Print the effective configuration as TOML and exit | Not with `INPUT` or `--calibrate` |
 | `--bed X Y Z` | `printer.bed` | `[220, 220, 250]` | mm | Build volume | Three values > 0 |
 | `--margin MM` | `printer.margin` | `5.0` | mm | Kept free on **each side** of every axis: usable size U = bed − 2 × margin | ≥ 0, and 2 × margin < the smallest bed dimension |
-| `--scale FACTOR` | `model.scale` | `1.0` | — | Uniform scale applied after loading (25.4 for a model exported in inches) | > 0 |
+| `--scale FACTOR` | `model.scale` | `1.0` | — | Uniform scale applied after loading (25.4 for a model exported in inches) | > 0; the scaled coordinates must stay within 5e9 mm, and the model within 1000 grid cells |
 | `--auto-orient` / `--no-auto-orient` | `model.auto_orient` | `true` | — | Try the 6 axis orders (as rotations, never mirrored) and keep the one with the fewest cells; on a tie, the model stays as it is when it can ([details](ALGORITHMS.md#auto-orientation)) | — |
 | `--simplify TOL` | `model.simplify` | `0.0` | mm | Simplify the mesh; surfaces move by less than TOL. 0 turns it off | ≥ 0 |
 | `--deep-repair` | `repair.deep` | `false` | — | Fall back to pymeshlab if basic repair fails (install the `deep-repair` extra, GPL-3.0) | — |
@@ -162,6 +164,9 @@ are listed with their formulas in PLAN.md §6 and computed in one place, `config
 - `--force` refuses (exit 1, before any work) to run when it would delete a file the run reads:
   the input, the `--config` file or a custom label font inside one of those outputs, such as
   `stlsplit out/parts/model.stl -o out --force`.
+- Replacing the outputs is all or nothing. A run prepares its files in `.stlsplit-staging/`
+  inside the directory and swaps them in at the end, so a failure, a full disk included, keeps
+  the previous outputs. The disk needs room for both versions for a moment.
 
 ## Example configuration
 

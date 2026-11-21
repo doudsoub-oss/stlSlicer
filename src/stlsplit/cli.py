@@ -9,23 +9,24 @@ Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to 
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
 Every stage, the assembly order and the encoding of every output file run before the output
-directory is prepared, so an unusable input never creates the directory, and ``--force`` never
-deletes the previous outputs for it. The calibration kit is likewise built before its directory
-is prepared.
+directory is touched, so an unusable input never creates it. ``io.publish_outputs`` then swaps
+the outputs in, all or nothing, so a failure at any stage keeps the previous outputs (§7.6). The
+calibration kit goes through the same steps.
 """
 
 import argparse
 import codecs
 import logging
 import math
+import os
 import sys
 import time
 import traceback
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from enum import Enum
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TextIO
 
 from manifold3d import Manifold
 
@@ -51,6 +52,8 @@ LOGGER = logging.getLogger("stlsplit")
 """Parent logger of the package; modules log through ``logging.getLogger(__name__)``."""
 
 _CONFIG_KEYS = frozenset(config.keys())
+
+_INTERRUPTED = "error: interrupted"
 
 
 class Mode(Enum):
@@ -370,8 +373,10 @@ def stage(name: str) -> Iterator[None]:
         name: Stage name for the log line.
     """
     start = time.perf_counter()
-    yield
-    LOGGER.debug("stage %s: %.3f s", name, time.perf_counter() - start)
+    try:
+        yield
+    finally:  # a stage that fails still shows how long it ran
+        LOGGER.debug("stage %s: %.3f s", name, time.perf_counter() - start)
 
 
 def report_diagnostics(diagnostics: Iterable[Diagnostic]) -> ExitCode:
@@ -410,7 +415,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ns = parser.parse_args(argv)
         verbose = "verbose" in ns
         setup_logging(1 if verbose else -1 if "quiet" in ns else 0)
-        return int(_run(ns))
+        with stage("total"):
+            return int(_run(ns))
     except ConfigError as exc:
         flag = config_flags(parser).get(exc.key)
         message = f"{flag} ({exc.key}): {exc.problem}" if flag else str(exc)
@@ -419,7 +425,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     except StlsplitError as exc:
         _print_error(f"error: {exc}", exc, verbose)
         return int(exc.exit_code)
+    except SystemExit:  # --help and --version: a closed pipe must not turn their 0 into 120
+        _flush_stdout()
+        raise
+    except KeyboardInterrupt as exc:
+        _print_error(_INTERRUPTED, exc, verbose)
+        return int(ExitCode.INTERRUPTED)
     except Exception as exc:
+        # shapely reports an allocation failure as a GEOSException naming std::bad_alloc.
+        if isinstance(exc, MemoryError) or "bad_alloc" in str(exc):
+            _print_error(
+                "error: out of memory on this model; close other programs, use --simplify for "
+                "a dense mesh, or a smaller --bed for very large cut faces",
+                exc,
+                verbose,
+            )
+            return int(ExitCode.INVALID_INPUT)
         _print_error(
             f"internal error: {type(exc).__name__}: {exc}. This is a bug; please report it "
             "with the full output of the same command run with -v",
@@ -429,13 +450,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(ExitCode.INTERNAL)
 
 
+def interrupted() -> int:
+    """Report a Ctrl-C pressed before ``main`` started (``stlsplit.__main__``).
+
+    Returns:
+        The exit code, 130.
+    """
+    _print_error(_INTERRUPTED, KeyboardInterrupt(), verbose=False)
+    return int(ExitCode.INTERRUPTED)
+
+
 def _run(ns: argparse.Namespace) -> ExitCode:
     mode = check_mode(ns)
     with stage("configuration"):
         cfg = resolve_config(ns)
     LOGGER.info("configuration: %s", _describe_sources(ns))
     if mode is Mode.PRINT_CONFIG:
-        sys.stdout.write(config.to_toml(cfg))
+        _write_stdout(config.to_toml(cfg))
         return ExitCode.SUCCESS
     if mode is Mode.CALIBRATE or cfg.labels.enabled:  # the runs that draw text
         io.check_label_font(io.resolve_label_font(cfg.advanced.label_font))
@@ -457,7 +488,9 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     with stage("orientation"):
         body, orientation = grid.orient(body, cfg)
     with stage("grid"):
-        layout, grid_diagnostics = grid.even_grid(grid.extent(body), config.derived(cfg).usable)
+        size, usable = grid.extent(body), config.derived(cfg).usable
+        grid.check_cell_limit(size, usable)
+        layout, grid_diagnostics = grid.even_grid(size, usable)
     LOGGER.info(
         "grid: %s = %d cells; rotation %s",
         " x ".join(str(n) for n in layout.counts),
@@ -501,7 +534,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         plan = assembly.plan_steps(solids, result.faces, placement.connectors)
     exit_code = max(exit_code, _report(reported, plan.diagnostics))
     if mode is Mode.DRY_RUN:
-        sys.stdout.write(dry_run_report(orientation, layout, result, placement))
+        _write_stdout(dry_run_report(orientation, layout, result, placement))
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
         return exit_code
@@ -511,10 +544,8 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         files = _encode_outputs(
             ns, cfg, orientation, layout, result, placement, applied, plan, reported
         )
-    with stage("output directory"):
-        io.prepare_output_dir(ns.output, force="force" in ns)
     with stage("write"):
-        io.write_outputs(ns.output, files)
+        io.publish_outputs(ns.output, files, force="force" in ns)
     for pin in applied.pins:
         LOGGER.info("pins: print %d x %s", pin.quantity, pin.file_name)
     dowels = sum(pin.quantity for pin in applied.pins)
@@ -528,6 +559,60 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     LOGGER.info("output: %s", ns.output)
     LOGGER.info("exit code: %d", exit_code)
     return exit_code
+
+
+def _write_stdout(text: str) -> None:
+    """Write and flush stdout, so a closed pipe (``--dry-run | head``) is one error line.
+
+    Raises:
+        InputError: stdout can't be written. It is then pointed at the null device, because
+            Python flushes it again at exit and would print a second error.
+    """
+    if sys.stdout is None:  # started with stdout closed (``>&-``)
+        raise InputError("can't write to standard output (it is closed)")
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except OSError as exc:  # BrokenPipeError, or EINVAL for a closed pipe on Windows
+        _discard(sys.stdout)
+        raise InputError(f"can't write to standard output ({exc.strerror})") from exc
+
+
+def _flush_stdout() -> None:
+    """Flush stdout now, so a closed pipe can't replace the exit code with 120 at exit."""
+    if sys.stdout is None:
+        return
+    try:
+        sys.stdout.flush()
+    except OSError:
+        _discard(sys.stdout)
+
+
+def _discard(stream: TextIO) -> None:
+    """Point a closed stream at the null device, so Python's flush at exit can't fail.
+
+    That flush would otherwise replace the run's exit code with 120.
+    """
+    with suppress(OSError, ValueError):  # ValueError: the stream has no usable descriptor
+        target = stream.fileno()
+        null = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(null, target)
+        os.close(null)
+
+
+def output_name(name: str) -> str:
+    r"""Return the input's file name as the output files record it: always valid UTF-8.
+
+    A name that isn't valid UTF-8 reaches Python with lone surrogates, which can't be encoded;
+    they are written as text, ``\udce9``, the same way on every run (ADR-0010).
+
+    Args:
+        name: The input's file name, without any folder.
+
+    Returns:
+        The name, unchanged if it is valid UTF-8.
+    """
+    return name.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def _report(reported: list[Diagnostic], diagnostics: Iterable[Diagnostic]) -> ExitCode:
@@ -556,7 +641,7 @@ def _encode_outputs(
     files |= {pin.file_name: io.encode_stl(geometry.to_trimesh(pin.solid)) for pin in applied.pins}
     document = assembly.build_document(
         version=__version__,
-        input_name=ns.input.name,
+        input_name=output_name(ns.input.name),
         cfg=cfg,
         orientation=orientation,
         layout=layout,
@@ -590,20 +675,17 @@ def _files_read(ns: argparse.Namespace, cfg: Config) -> list[Path]:
 
 
 def _write_calibration_kit(ns: argparse.Namespace, cfg: Config) -> ExitCode:
-    """Build the kit, then write it: a failure leaves the previous outputs alone."""
+    """Build the kit, then publish it: a failure leaves the previous outputs alone."""
     with stage("calibration kit"):
         kit = calibrate.build_kit(cfg, io.resolve_label_font(cfg.advanced.label_font))
-    with stage("output directory"):
-        io.prepare_output_dir(ns.output, force="force" in ns)
     with stage("export"):
-        io.write_stl_files(
-            ns.output,
-            {
-                calibrate.BLOCK_FILE: geometry.to_trimesh(kit.block),
-                kit.pin_file: geometry.to_trimesh(kit.pin),
-            },
-        )
-        io.write_text_file(ns.output, calibrate.README_FILE, kit.readme)
+        files = {
+            calibrate.BLOCK_FILE: io.encode_stl(geometry.to_trimesh(kit.block)),
+            kit.pin_file: io.encode_stl(geometry.to_trimesh(kit.pin)),
+            calibrate.README_FILE: kit.readme.encode("utf-8"),
+        }
+    with stage("write"):
+        io.publish_outputs(ns.output, files, force="force" in ns)
     LOGGER.info("calibration: print %d x %s", calibrate.BLOCKS_TO_PRINT, calibrate.BLOCK_FILE)
     LOGGER.info("calibration: print %d x %s", kit.pin_count, kit.pin_file)
     LOGGER.info("calibration: instructions in %s", calibrate.README_FILE)
@@ -779,18 +861,28 @@ def _default_text(key: str) -> str:
 
 def _print_error(line: str, exc: BaseException, verbose: bool) -> None:
     """Print one line on stderr; with ``-v``, the traceback first."""
-    if verbose:
-        traceback.print_exception(exc, file=sys.stderr)
-    print("stlsplit: " + " ".join(line.splitlines()), file=sys.stderr)
+    if sys.stderr is None:  # started with stderr closed (``2>&-``); print would use stdout
+        return
+    try:
+        if verbose:
+            traceback.print_exception(exc, file=sys.stderr)
+        print("stlsplit: " + " ".join(line.splitlines()), file=sys.stderr)
+        sys.stderr.flush()
+    except OSError:  # stderr closed too (``2>&1 | head``): the exit code still tells
+        _discard(sys.stderr)
 
 
 class _StderrHandler(logging.Handler):
     """Write log lines to the ``sys.stderr`` of the moment (tests replace it between runs)."""
 
     def emit(self, record: logging.LogRecord) -> None:
+        if sys.stderr is None:  # started with stderr closed (``2>&-``)
+            return
         try:
             sys.stderr.write(self.format(record) + "\n")
             sys.stderr.flush()
+        except OSError:  # a closed pipe (``2>&1 | head``) doesn't stop or fail the run
+            _discard(sys.stderr)
         except Exception:
             self.handleError(record)
 
