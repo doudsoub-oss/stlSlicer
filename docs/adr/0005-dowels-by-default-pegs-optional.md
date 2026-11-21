@@ -22,4 +22,6 @@ Simplest, but some users prefer no loose parts.
 ## Consequences
 - Easier: strong joints by default.
 - Harder: peg mode makes more pieces because U shrinks.
+- What must fit (clarified in Phase 7, PLAN.md Appendix E, r10): **cells** fit the reduced U, and a **final piece, peg included,** fits `bed − 2·margin`. On a 120 mm bed with a 5 mm margin, U is 100 mm and a full cell plus its 10 mm peg is 110 mm. Invariant I2 and `tools.check_piece` use this limit (`derived(cfg).printable`).
+- The peg is fused to the neg piece and reaches 0.01 mm into it (`TOOL_OVERLAP`): a cut face's vertices can be off the plane by float noise, and a peg based exactly on the plane can stay a separate shell (docs/LIBRARY_NOTES.md, `manifold.face_float_noise`).
 - Revisit when: other connector types (dovetails, snap-fits, v2) are added.

@@ -11,7 +11,7 @@ import pytest
 import trimesh
 from manifold3d import Manifold
 
-from stlsplit import __version__, cli, config, connectors, cutting, errors, grid
+from stlsplit import __version__, cli, config, connectors, cutting, errors, grid, io, tools
 from stlsplit.config import Config
 from stlsplit.errors import ExitCode
 from stlsplit.models import Grid, Plane
@@ -287,6 +287,114 @@ def test_calibrate_prepares_the_output_directory(tmp_path: Path) -> None:
     out = tmp_path / "calibration-out"
     assert cli.main(["--calibrate", "-o", str(out)]) == ExitCode.SUCCESS
     assert out.is_dir()
+
+
+def test_calibrate_writes_the_kit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "kit"
+    assert cli.main(["--calibrate", "-o", str(out)]) == ExitCode.SUCCESS
+    assert sorted(p.name for p in (out / "calibration").iterdir()) == [
+        "README.md",
+        "block.stl",
+        "pin_d5.0_l20.0.stl",
+    ]
+    block, _ = io.load_stl(out / "calibration" / "block.stl", 1.0)
+    assert block.is_watertight
+    assert block.extents == pytest.approx((50.0, 12.4, 13.5), abs=1e-3)
+    err = capsys.readouterr().err
+    assert "not implemented" not in err
+    assert "print 2 x calibration/block.stl" in err
+    assert "print 5 x calibration/pin_d5.0_l20.0.stl" in err
+
+
+def test_calibrate_uses_the_connector_options(tmp_path: Path) -> None:
+    out = tmp_path / "kit"
+    arguments = ["--calibrate", "-o", str(out), "--dowel-diameter", "6", "--dowel-length", "24"]
+    assert cli.main(arguments) == ExitCode.SUCCESS
+    assert (out / "calibration" / "pin_d6.0_l24.0.stl").is_file()
+
+
+TWO_DOWELS_ON_A_SMALL_BED = ["--bed", "120", "120", "120", "--max-connectors-per-face", "2"]
+
+
+def test_split_writes_the_pins_and_reports_their_count(
+    write_stl: WriteStl, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stl = write_stl(Manifold.cube((200.0, 100.0, 100.0)), "model")
+    out = tmp_path / "out"
+    assert cli.main([str(stl), "-o", str(out), *TWO_DOWELS_ON_A_SMALL_BED]) == ExitCode.SUCCESS
+    pin = out / "dowels" / "dowel_d5.0_l20.0.stl"
+    assert io.load_stl(pin, 1.0)[0].is_watertight
+    assert "print 2 x dowels/dowel_d5.0_l20.0.stl" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("connector", ["peg", "none"])
+def test_split_without_loose_pins_writes_no_dowels_folder(
+    write_stl: WriteStl, tmp_path: Path, connector: str
+) -> None:
+    stl = write_stl(Manifold.cube((200.0, 100.0, 100.0)), "model")
+    out = tmp_path / "out"
+    arguments = [str(stl), "-o", str(out), *TWO_DOWELS_ON_A_SMALL_BED, "--connector", connector]
+    assert cli.main(arguments) == ExitCode.SUCCESS
+    assert out.is_dir()
+    assert not (out / "dowels").exists()
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "split"])
+def test_pin_lengths_that_would_share_a_file_are_refused(
+    write_stl: WriteStl,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    dry_run: bool,
+) -> None:
+    # 15.25 and 15.15 mm both read l15.2. The right half is 10.1 mm deep at y > 30, so one pin
+    # is shortened to 15.15, and writing both would silently lose one of them.
+    body = (
+        Manifold.cube((50.0, 60.0, 30.0))
+        + Manifold.cube((50.0, 30.0, 30.0)).translate((50.0, 0.0, 0.0))
+        + Manifold.cube((10.1, 30.0, 30.0)).translate((50.0, 30.0, 0.0))
+    )
+    toml = tmp_path / "pins.toml"
+    toml.write_text(
+        "[printer]\nbed = [70, 70, 70]\n[model]\nauto_orient = false\n"
+        "[connectors]\nlength = 15.25\nmax_per_face = 2\n"
+        "[advanced]\npin_length_step = 0.1\nnudge_window = 0.0\n"
+    )
+    out = tmp_path / "out"
+    mode = ["--dry-run"] if dry_run else ["-o", str(out)]
+    arguments = [str(write_stl(body, "model")), "--config", str(toml), *mode]
+    assert cli.main(arguments) == ExitCode.INVALID_INPUT
+    assert "advanced.pin_length_step" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_dry_run_runs_no_boolean_and_writes_no_pin(
+    write_stl: WriteStl, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object) -> None:
+        raise AssertionError("a dry run must not apply the tools")
+
+    monkeypatch.setattr(tools, "apply", fail)
+    stl = write_stl(Manifold.cube((200.0, 100.0, 100.0)), "model")
+    out = tmp_path / "out"
+    arguments = [str(stl), "--dry-run", "-o", str(out), *TWO_DOWELS_ON_A_SMALL_BED]
+    assert cli.main(arguments) == ExitCode.SUCCESS
+    assert not out.exists()
+
+
+def test_a_failure_in_the_tools_keeps_the_previous_outputs(
+    write_stl: WriteStl, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object) -> None:
+        raise AssertionError("a bug in the tools")
+
+    monkeypatch.setattr(tools, "apply", fail)
+    stl = write_stl(Manifold.cube((200.0, 100.0, 100.0)), "model")
+    out = tmp_path / "out"
+    (out / "dowels").mkdir(parents=True)
+    (out / "dowels" / "old.stl").write_text("old")
+    arguments = [str(stl), "-o", str(out), "--force", *TWO_DOWELS_ON_A_SMALL_BED]
+    assert cli.main(arguments) == ExitCode.INTERNAL
+    assert (out / "dowels" / "old.stl").read_text() == "old"
 
 
 def test_dry_run_accepts_and_ignores_the_output_option(write_stl: WriteStl, tmp_path: Path) -> None:

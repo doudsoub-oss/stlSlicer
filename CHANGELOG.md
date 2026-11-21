@@ -77,3 +77,22 @@ All notable changes to this project are documented here. The format follows
   connector (position, pin length, hole depths) and the pins to print by diameter and length.
 - `--dowel-length` can't exceed the longer side of the bed plate, max(bed X, bed Y): pins are
   printed lying down (exit 1 otherwise, naming the option).
+- Tool solids: every connector is applied with one batched boolean per piece. Dowel holes with a
+  mouth chamfer line up on both pieces; with `--connector peg`, the peg is fused to one piece and
+  the other gets the hole. Each piece is checked afterwards (valid, one shell per body, volumes
+  within 5 %, fits bed − 2 × margin).
+- Loose pins: a split writes one STL per pin length in `dowels/`, lying on its flat, and the log
+  says how many of each to print (`pins: print 6 x dowels/dowel_d5.0_l20.0.stl`).
+- `stlsplit --calibrate` writes the calibration kit to `calibration/`: a bar with one hole per
+  clearance and its engraved code, the test pin, and a README on printing, testing and choosing
+  a clearance.
+
+### Changed
+- `advanced.pin_chamfer` must now be smaller than the pin's radius (exit 1 otherwise): a larger
+  chamfer can't be built. With the default 0.5 mm, this rejects a pin diameter of 1 mm or less
+  unless the chamfer is lowered too.
+- `--dowel-diameter` must be at least 0.1 mm: thinner pins collapsed into empty or open meshes.
+- A run stops with exit 1 when two pin lengths it uses would share a file name (15.25 and
+  15.15 mm both read `l15.2`), instead of losing one of them.
+- `--calibrate` exits 1 for a bar that doesn't fit the printer, an engraving that would reach a
+  hole, or holes that would touch.

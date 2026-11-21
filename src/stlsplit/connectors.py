@@ -471,20 +471,24 @@ def fits_inside(
     return geometry.lies_inside(probe, body)
 
 
-def hole_solids(connector: Connector, face: CutFace, cfg: Config) -> list[tuple[str, Manifold]]:
+def hole_solids(
+    connector: Connector, face: CutFace, cfg: Config, *, overlap: float = 0.0
+) -> list[tuple[str, Manifold]]:
     """Return a connector's holes as the collision check sees them (``geometry.hole_solid``).
 
     Args:
         connector: A placed connector.
         face: Its cut face.
         cfg: The configuration (r_h, ch_h, n_seg).
+        overlap: How far each solid also reaches past the face, mm: ``TOOL_OVERLAP`` for the
+            cutters of ``tools.apply``, 0 for the holes' real shape.
 
     Returns:
         (piece ID, hole solid in the cutting frame) per side with a hole, neg piece first.
     """
     depths = {-1: connector.hole_depth_neg, 1: connector.hole_depth_pos}
     return [
-        (piece, _hole(face.plane, connector.position_uv, side, depths[side], cfg).solid)
+        (piece, _hole(face.plane, connector.position_uv, side, depths[side], cfg, overlap).solid)
         for piece, side in _sides(face, connector.kind)
     ]
 
@@ -496,7 +500,14 @@ def _sides(face: CutFace, kind: ConnectorKind) -> tuple[Side, ...]:
     return ((face.piece_neg, -1), (face.piece_pos, 1))
 
 
-def _hole(plane: Plane, uv: tuple[float, float], side: int, depth: float, cfg: Config) -> Hole:
+def _hole(
+    plane: Plane,
+    uv: tuple[float, float],
+    side: int,
+    depth: float,
+    cfg: Config,
+    overlap: float = 0.0,
+) -> Hole:
     solid = geometry.hole_solid(
         plane.axis,
         plane.offset,
@@ -506,6 +517,7 @@ def _hole(plane: Plane, uv: tuple[float, float], side: int, depth: float, cfg: C
         _derived(cfg).hole_radius,
         cfg.advanced.hole_chamfer,
         cfg.advanced.circular_segments,
+        overlap=overlap,
     )
     mouth = geometry.local_point(plane.axis, uv[0], uv[1], plane.offset)
     bottom = geometry.local_point(plane.axis, uv[0], uv[1], plane.offset + side * depth)

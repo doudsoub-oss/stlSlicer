@@ -6,11 +6,42 @@ Phase 9).
 
 ## Folder layout
 
-TODO (Phase 9): `parts/`, `dowels/`, `assembly.json`, `assembly.md`, `preview_exploded.glb`.
+A split writes:
+
+```text
+out/
+└── dowels/
+    ├── dowel_d5.0_l20.0.stl     # one file per (diameter, length)
+    └── dowel_d5.0_l18.0.stl
+```
+
+There is no `dowels/` folder when the run has no loose pins (`--connector peg` or `none`).
+TODO (Phase 9): `parts/`, `assembly.json`, `assembly.md`, `preview_exploded.glb`.
+
+`stlsplit --calibrate` writes:
+
+```text
+out/
+└── calibration/
+    ├── block.stl                # print 2
+    ├── pin_d5.0_l20.0.stl       # print one per hole
+    └── README.md                # how to print, test and read the codes
+```
 
 ## File naming
 
-TODO (Phase 9): `parts/{piece}.stl`, `dowels/dowel_d{d:.1f}_l{L:.1f}.stl`.
+| File | Content | Geometry |
+|---|---|---|
+| `dowels/dowel_d{d:.1f}_l{L:.1f}.stl` | One loose pin of diameter d and length L, mm. The log gives the quantity (`pins: print 6 x …`). | Axis along X from x = 0 to L, flat on z = 0, bounding-box minimum at the origin |
+| `calibration/block.stl` | One calibration bar (PLAN.md §6.3) | Bounding-box minimum at the origin, length along X, holes opening towards +Z, codes on the side face y = 0 |
+| `calibration/pin_d{d:.1f}_l{L:.1f}.stl` | The test pin, of length L_max | As a dowel |
+| `calibration/README.md` | UTF-8 Markdown, LF line ends, with the table of codes | — |
+
+Names keep one decimal. Two pin lengths that would read the same (15.25 and 15.15 mm) stop the run
+with exit 1. STL files are binary with an all-zero header. Nothing in an output depends on the date, the machine
+or the path (ADR-0010).
+
+TODO (Phase 9): `parts/{piece}.stl`.
 
 ## Identifiers
 

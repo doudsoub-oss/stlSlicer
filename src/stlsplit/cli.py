@@ -8,12 +8,13 @@ directory (§7.6), runs the stages and turns their diagnostics into the exit cod
 Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to stderr; the
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
-Load, repair, orientation, grid, cutting and connector placement run before the output
-directory is prepared, so an unusable input never creates the directory, and ``--force``
-never deletes the previous outputs for it.
+Load, repair, orientation, grid, cutting, connector placement and the tools run before the
+output directory is prepared, so an unusable input never creates the directory, and
+``--force`` never deletes the previous outputs for it. The calibration kit is likewise built
+before its directory is prepared.
 
-Phase 5: the stages after the connector placement don't exist yet, so the split and dry-run
-modes stop with a warning after it, and the calibration mode after the checks.
+Phase 7: a split writes the loose pins (``dowels/``), and ``--calibrate`` is complete. The
+stages after the tools don't exist yet, so the split and dry-run modes end with a warning.
 """
 
 import argparse
@@ -31,7 +32,18 @@ from typing import Any, NoReturn
 
 from manifold3d import Manifold
 
-from stlsplit import __version__, config, connectors, cutting, grid, io, repair
+from stlsplit import (
+    __version__,
+    calibrate,
+    config,
+    connectors,
+    cutting,
+    geometry,
+    grid,
+    io,
+    repair,
+    tools,
+)
 from stlsplit.config import OUTPUT_DECIMALS, Config
 from stlsplit.errors import ConfigError, ExitCode, InputError, StlsplitError, exit_code_for
 from stlsplit.models import Diagnostic, Grid, Orientation
@@ -426,63 +438,96 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if mode is Mode.PRINT_CONFIG:
         sys.stdout.write(config.to_toml(cfg))
         return ExitCode.SUCCESS
+    if mode is Mode.CALIBRATE:
+        return _write_calibration_kit(ns, cfg)
     exit_code = ExitCode.SUCCESS
-    if mode is not Mode.CALIBRATE:
-        # Each stage's diagnostics are logged as soon as it returns, so a load warning (W006)
-        # is still shown when repair then fails.
-        with stage("load"):
-            mesh, loaded = io.load_stl(ns.input, cfg.model.scale)
-        exit_code = max(exit_code, report_diagnostics(loaded))
-        with stage("repair"):
-            body, report = repair.prepare(mesh, cfg)
-        LOGGER.info("%s", _model_summary(body, report))
-        exit_code = max(exit_code, report_diagnostics(report.diagnostics))
-        with stage("orientation"):
-            body, orientation = grid.orient(body, cfg)
-        with stage("grid"):
-            layout, grid_diagnostics = grid.even_grid(grid.extent(body), config.derived(cfg).usable)
-        LOGGER.info(
-            "grid: %s = %d cells; rotation %s",
-            " x ".join(str(n) for n in layout.counts),
-            math.prod(layout.counts),
-            orientation.name,
-        )
-        exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
-        with stage("nudging"):
-            nudged = grid.nudge(body, layout, cfg)
-        if any(layout.planes):
-            LOGGER.info("nudging: %s", _nudge_summary(layout, nudged))
-        layout = nudged
-        with stage("cutting"):
-            result = cutting.cut(body, layout, cfg, report.reference_volume)
-        LOGGER.info(
-            "cutting: %s, %s",
-            _plural(len(result.pieces), "piece"),
-            _plural(len(result.faces), "cut face"),
-        )
-        exit_code = max(exit_code, report_diagnostics(result.diagnostics))
-        with stage("connectors"):
-            placement = connectors.place(result.pieces, result.faces, cfg)
-        LOGGER.info(
-            "connectors: %d on %d of %s",
-            len(placement.connectors),
-            len({connector.face_id for connector in placement.connectors}),
-            _plural(len(result.faces), "cut face"),
-        )
-        exit_code = max(exit_code, report_diagnostics(placement.diagnostics))
-        if mode is Mode.DRY_RUN:
-            sys.stdout.write(dry_run_report(orientation, layout, result, placement))
+    # Each stage's diagnostics are logged as soon as it returns, so a load warning (W006) is
+    # still shown when repair then fails.
+    with stage("load"):
+        mesh, loaded = io.load_stl(ns.input, cfg.model.scale)
+    exit_code = max(exit_code, report_diagnostics(loaded))
+    with stage("repair"):
+        body, report = repair.prepare(mesh, cfg)
+    LOGGER.info("%s", _model_summary(body, report))
+    exit_code = max(exit_code, report_diagnostics(report.diagnostics))
+    with stage("orientation"):
+        body, orientation = grid.orient(body, cfg)
+    with stage("grid"):
+        layout, grid_diagnostics = grid.even_grid(grid.extent(body), config.derived(cfg).usable)
+    LOGGER.info(
+        "grid: %s = %d cells; rotation %s",
+        " x ".join(str(n) for n in layout.counts),
+        math.prod(layout.counts),
+        orientation.name,
+    )
+    exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
+    with stage("nudging"):
+        nudged = grid.nudge(body, layout, cfg)
+    if any(layout.planes):
+        LOGGER.info("nudging: %s", _nudge_summary(layout, nudged))
+    layout = nudged
+    with stage("cutting"):
+        result = cutting.cut(body, layout, cfg, report.reference_volume)
+    LOGGER.info(
+        "cutting: %s, %s",
+        _plural(len(result.pieces), "piece"),
+        _plural(len(result.faces), "cut face"),
+    )
+    exit_code = max(exit_code, report_diagnostics(result.diagnostics))
+    with stage("connectors"):
+        placement = connectors.place(result.pieces, result.faces, cfg)
+    LOGGER.info(
+        "connectors: %d on %d of %s",
+        len(placement.connectors),
+        len({connector.face_id for connector in placement.connectors}),
+        _plural(len(result.faces), "cut face"),
+    )
+    exit_code = max(exit_code, report_diagnostics(placement.diagnostics))
+    tools.check_pin_names(placement.connectors)  # here, so a dry run refuses what a split would
     if mode is Mode.DRY_RUN:
+        sys.stdout.write(dry_run_report(orientation, layout, result, placement))
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
     else:
+        with stage("tools"):
+            applied = tools.apply(result.pieces, result.faces, placement.connectors, cfg)
         with stage("output directory"):
             io.prepare_output_dir(ns.output, force="force" in ns)
+        with stage("pins"):
+            _write_pins(ns.output, applied.pins)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 7 onwards); stopping here",
+        "the %s mode is not implemented yet (PLAN.md Phase 8 onwards); stopping here",
         mode.value,
     )
     return exit_code
+
+
+def _write_pins(output: Path, pins: Sequence[tools.PinGroup]) -> None:
+    """Write one STL per pin length and log how many of each to print."""
+    io.write_stl_files(output, {pin.file_name: geometry.to_trimesh(pin.solid) for pin in pins})
+    for pin in pins:
+        LOGGER.info("pins: print %d x %s", pin.quantity, pin.file_name)
+
+
+def _write_calibration_kit(ns: argparse.Namespace, cfg: Config) -> ExitCode:
+    """Build the kit, then write it: a failure leaves the previous outputs alone."""
+    with stage("calibration kit"):
+        kit = calibrate.build_kit(cfg, io.resolve_label_font(cfg.advanced.label_font))
+    with stage("output directory"):
+        io.prepare_output_dir(ns.output, force="force" in ns)
+    with stage("export"):
+        io.write_stl_files(
+            ns.output,
+            {
+                calibrate.BLOCK_FILE: geometry.to_trimesh(kit.block),
+                kit.pin_file: geometry.to_trimesh(kit.pin),
+            },
+        )
+        io.write_text_file(ns.output, calibrate.README_FILE, kit.readme)
+    LOGGER.info("calibration: print %d x %s", calibrate.BLOCKS_TO_PRINT, calibrate.BLOCK_FILE)
+    LOGGER.info("calibration: print %d x %s", kit.pin_count, kit.pin_file)
+    LOGGER.info("calibration: instructions in %s", calibrate.README_FILE)
+    return ExitCode.SUCCESS
 
 
 def dry_run_report(

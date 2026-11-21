@@ -13,10 +13,9 @@ stlsplit --calibrate -o ./calibration                    # print once, then pick
 stlsplit --print-config --config my_printer.toml         # show the effective settings
 ```
 
-> **Status (Phase 2):** options are parsed, merged and validated; the split and dry run load
-> and repair the input (`--scale`, `--simplify` and `--deep-repair` take effect), then stop
-> with a warning; the calibration stops after preparing the output directory. The pipeline
-> lands phase by phase (PLAN.md §10).
+> **Status (Phase 7):** `--calibrate` and `--print-config` are complete. A split runs up to the
+> tool booleans and writes the loose pins (`dowels/`), and a dry run stops after the connector
+> placement; both then end with a warning until labels and the piece export land (PLAN.md §10).
 
 ## Modes
 
@@ -114,7 +113,7 @@ mark; UTF-16 with a byte order mark (what PowerShell 5.1's `>` writes) is accept
 | `--simplify TOL` | `model.simplify` | `0.0` | mm | Simplify the mesh; surfaces move by less than TOL. 0 turns it off | ≥ 0 |
 | `--deep-repair` | `repair.deep` | `false` | — | Fall back to pymeshlab if basic repair fails (install the `deep-repair` extra, GPL-3.0) | — |
 | `--connector TYPE` | `connectors.type` | `"dowel"` | — | `dowel` (holes on both sides, loose pins), `peg` (pegs on one side) or `none` (ADR-0005) | `dowel`, `peg`, `none` |
-| `--dowel-diameter MM` | `connectors.diameter` | `5.0` | mm | Pin diameter d | > 0 |
+| `--dowel-diameter MM` | `connectors.diameter` | `5.0` | mm | Pin diameter d | ≥ 0.1 |
 | `--dowel-length MM` | `connectors.length` | `20.0` | mm | Exact length of a full pin, L_max. Shallow faces get shorter standard lengths (PLAN.md §6.2) | ≥ L_min = `pin_min_length_factor` × d (15 by default); ≤ the longer side of the bed plate, max(bed X, bed Y) (pins are printed lying down); in peg mode, length / 2 < U on every axis |
 | `--clearance MM` | `connectors.clearance` | `0.2` | mm | Radial clearance added to holes; depends on your printer, measure it with `--calibrate` | ≥ 0 |
 | `--min-wall MM` | `connectors.min_wall` | `2.0` | mm | Minimum material around and between holes | > 0 |
@@ -135,9 +134,9 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | TOML key | Default | Unit | Meaning | Allowed values |
 |---|---|---|---|---|
 | `advanced.axial_play` | `0.5` | mm | Each hole is this much deeper than the pin end (glue room) | ≥ 0 |
-| `advanced.pin_length_step` | `2.0` | mm | Step between standard pin lengths (20, 18, 16 by default) | ≥ 0.1 |
+| `advanced.pin_length_step` | `2.0` | mm | Step between standard pin lengths (20, 18, 16 by default) | ≥ 0.1. A run stops with exit 1 if two lengths it uses would share a file name (15.25 and 15.15 both read `l15.2`): use a length and a step that are multiples of 0.1 |
 | `advanced.pin_min_length_factor` | `3.0` | — | Shortest allowed pin L_min = factor × d | > 0 |
-| `advanced.pin_chamfer` | `0.5` | mm | Chamfer on pin and peg ends | ≥ 0 and < L_min / 4 |
+| `advanced.pin_chamfer` | `0.5` | mm | Chamfer on pin and peg ends | ≥ 0, < L_min / 4 and < d / 2 |
 | `advanced.pin_flat` | `0.4` | mm | Depth of the flat pins are printed on (0 = round pins) | ≥ 0 and < d / 4 |
 | `advanced.hole_chamfer` | `0.4` | mm | Chamfer at the hole mouth | ≥ 0 and ≤ w / 2 |
 | `advanced.circular_segments` | `64` | — | Segments per circle | Integer from 16 to 256 |
@@ -150,7 +149,7 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | `advanced.label_font` | `"DejaVuSans-Bold.ttf"` | — | Label font: a font bundled with matplotlib (bare file name) or an absolute path | Must resolve to an existing file |
 | `advanced.label_min_height` | `4.0` | mm | Smallest label text height | > 0 and ≤ `label_max_height` |
 | `advanced.label_max_height` | `12.0` | mm | Largest label text height | ≥ `label_min_height` |
-| `advanced.calibration_clearances` | `[0.10, 0.15, 0.20, 0.25, 0.30]` | mm | Clearances of the calibration kit's holes | 1 to 10 values, each ≥ 0, strictly increasing |
+| `advanced.calibration_clearances` | `[0.10, 0.15, 0.20, 0.25, 0.30]` | mm | Clearances of the calibration kit's holes, engraved in hundredths of a millimetre (0.123 reads `12.3`) | 1 to 10 values, each ≥ 0, strictly increasing; `--calibrate` also needs them at least 0.0001 apart, so that their codes differ, and refuses a bar that doesn't fit the printer, an engraving that would reach a hole, or holes that would touch |
 | `advanced.preview_spread` | `0.15` | — | Exploded-view offset per grid step, as a fraction of the model size | ≥ 0 |
 
 The values derived from these (usable volume, standard pin lengths, hole depths, hole radius, …)

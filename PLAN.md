@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r9** (2026-11-19); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r10** (2026-11-21); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -237,7 +237,7 @@ stlsplit/
 | `grid` | Usable volume, auto-orient, even grid, plane nudging | `geometry`, `connectors` (for `safe_region`) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` (r7) |
 | `labels` | Text outlines and layout on a face | `geometry` |
-| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` |
+| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (`hole_solids`), `grid` (`fits`) (r10) |
 | `calibrate` | Calibration kit | `tools`, `labels` |
 | `assembly` | Assembly order; JSON and Markdown content; preview scene | `models`, `config` |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` |
@@ -457,7 +457,7 @@ Asserted in code where cheap, tested everywhere else.
 | ID | Invariant |
 |---|---|
 | I1 | Every piece body has status `NoError` and a positive volume. |
-| I2 | Every final piece (connectors and pegs included) fits inside U. |
+| I2 | Every cell fits U, and every final piece (connectors and pegs included) fits inside bed − 2·margin, which in peg mode is U + L_max/2 (r10). |
 | I3 | Before tools are applied, the piece volumes add up to the reference volume (Phase 2) within 0.1 %. |
 | I4 | Every cut face has exactly one piece on each side, and its region lies inside both pieces' sections. |
 | I5 | No two holes in the same piece are closer than `min_wall` (measured with `min_gap`). |
@@ -478,7 +478,8 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 |---|---|---|---|
 | bed | Build volume | `printer.bed` | 220 × 220 × 250 mm |
 | m | Margin kept free on each side of every axis | `printer.margin` | 5 mm |
-| U | Usable volume per axis | `bed − 2·m`; peg mode: also `− L_max/2` | 210 × 210 × 240 (peg mode: 200 × 200 × 230) |
+| U | Usable volume per axis: what a cell must fit | `bed − 2·m`; peg mode: also `− L_max/2` | 210 × 210 × 240 (peg mode: 200 × 200 × 230) |
+| U_print | Printable volume per axis: what a final piece must fit, its pegs included (r10) | `bed − 2·m` | 210 × 210 × 240 |
 | d | Pin diameter | `connectors.diameter` | 5.0 |
 | c | Radial clearance added to holes | `connectors.clearance` | 0.2 |
 | w | Minimum wall around and between holes | `connectors.min_wall` | 2.0 |
@@ -503,6 +504,7 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 | island | "Tiny island" area threshold (nudging) | `4 · π · (d/2)²` | 78.5 mm² |
 | ε | Half-thickness of the section probe | `advanced.section_epsilon` | 0.01 |
 | ε_ray | Ray start offset inside a piece | constant `RAY_START_OFFSET` | 0.01 |
+| ε_tool | How far hole cutters and pegs reach past a cut face (r10) | constant `TOOL_OVERLAP` | 0.01 |
 | keep-out | Label keep-out radius around a connector | `r_h + ch_h + w` | 5.1 |
 | r_probe | Radius of the circle of depth rays and of the containment cylinder (r8) | `r_h + w` | 4.7 |
 | ray length | Length of the depth rays (r8) | `h(L_max) + w + RAY_LENGTH_MARGIN` (1 mm) | 13.5 |
@@ -543,8 +545,12 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 The holes sit in one row, centred across the width, so two identical bars flipped face to face line
 up hole for hole, with the same clearance. Each hole's code is engraved on one long side face, under
 the hole, at height H_min. The code is the clearance in hundredths of a millimetre (`10`, `15`, `20`,
-`25`, `30`). Two digits fit within one pitch, and the engraving leaves 2.4 mm of wall to the hole
-mouth (≥ w).
+`25`, `30`), with up to two decimals when needed (`12.3` for 0.123; r10). With the defaults two digits
+fit within one pitch, and the engraving leaves 2.4 mm of wall to the hole mouth (≥ w). When a code
+wouldn't fit (a small pin, a long code), the height shrinks just enough: a code is at most
+pitch − `CALIBRATION_CODE_GAP` (1 mm) wide and thickness − 2 mm tall (r10). Clearances that would get
+the same code are an error (exit 1), and so are a bar that doesn't fit the printable volume, an
+engraving that would reach a hole, and holes that would touch (r10).
 
 ---
 
@@ -631,13 +637,13 @@ the key.
 - Every number is finite (TOML accepts `inf` and `nan`), and integers fit in 64 bits.
 - `bed`: three values > 0. `margin` ≥ 0 and `2·margin` < the smallest bed dimension.
 - `scale` > 0. `simplify` ≥ 0.
-- `diameter` > 0, `clearance` ≥ 0, `min_wall` > 0, `max_per_face` ≥ 1.
+- `diameter` ≥ 0.1 (r10), `clearance` ≥ 0, `min_wall` > 0, `max_per_face` ≥ 1.
 - `length` ≥ L_min (so a full pin is never shorter than the shortest allowed pin), and
   `length` ≤ max(bed X, bed Y): pins are printed lying down (r8).
 - `labels.depth` > 0 and < `min_wall`.
 - Peg mode: every `U_i − L_max/2` > 0.
 - Advanced: `axial_play` ≥ 0; `pin_length_step` ≥ 0.1; `pin_min_length_factor` > 0;
-  0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < L_min/4; 0 ≤ `hole_chamfer` ≤ w/2;
+  0 ≤ `pin_flat` < d/4; 0 ≤ `pin_chamfer` < min(L_min/4, d/2) (r10); 0 ≤ `hole_chamfer` ≤ w/2;
   16 ≤ `circular_segments` ≤ 256; `connector_spacing_factor` > 0; `connector_area_factor` > 0;
   `nudge_window` ≥ 0; `nudge_step` > 0 and `nudge_window / nudge_step` ≤ 100 (r9);
   0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
@@ -1451,8 +1457,9 @@ a connector, without breaking the bed fit and without moving planes for no gain.
 **Goal.** Apply every connector feature with one batched boolean per piece, export the pins, and
 generate the calibration kit.
 
-**Files.** `tools.py`, `calibrate.py`, `tests/integration/test_tools.py`,
-`tests/integration/test_calibrate.py`.
+**Files.** `tools.py`, `calibrate.py`, `labels.py` (text outlines only, r10), `tests/integration/test_tools.py`,
+`tests/integration/test_calibrate.py`; small changes to `config.py`, `geometry.py`, `connectors.py`,
+`io.py` and `cli.py` (r10).
 
 **Tasks.**
 1. **Hole tool**, one per connector, built in plane-local coordinates and mapped to the world with the
@@ -1461,10 +1468,12 @@ generate the calibration kit.
      plane to h_pos above it.
    - A mouth chamfer on each side: a cone from r_h + ch_h at the plane to r_h at ±ch_h.
 
-   The **same tool is subtracted from both pieces**, so the holes line up by construction.
+   **Both sides come from the same axis point** (`connectors.hole_solids`), so the holes line up
+   by construction; each piece is cut with its own side, which removes the same volume as one
+   shared tool (r10). Each cutter reaches `TOOL_OVERLAP` past the face (r10).
 2. **Pegs** (peg mode):
    - The peg is a cylinder of radius d/2, from the plane to L/2 into the pos side, with a tip
-     chamfer ch_p. It is unioned with the neg piece.
+     chamfer ch_p. It is unioned with the neg piece, reaching `TOOL_OVERLAP` into it (r10).
    - The pos piece gets the hole tool with depth h(L).
 3. **Batching.** Per piece:
    - collect its tools and union them once with `batch_boolean(..., OpType.Add)`;
@@ -1476,9 +1485,10 @@ generate the calibration kit.
    - Exported lying on the flat: axis along X, flat on z = 0.
    - One file per (d, L), `dowels/dowel_d{d:.1f}_l{L:.1f}.stl`, with the count in the report.
 5. **Validation.**
-   - Every piece still has status `NoError`.
+   - Every piece still has status `NoError` and the same number of outer shells (r10).
    - The volume removed from each piece equals the volume of its tools inside it, within 5 %. Phase 5
      guarantees the tools don't overlap.
+   - Every piece fits bed − 2·margin (I2, r10).
 6. **Calibration kit** (`--calibrate`, no input file; dimensions in §6.3):
    - **The bar.** One hole per clearance in `calibration_clearances`, all h(L_max) deep, in a row
      centred across the bar's width. Each hole's code is engraved on one long side face, under the
@@ -1499,7 +1509,8 @@ generate the calibration kit.
 - Holes line up: slicing both halves 1 mm from the plane gives hole centres equal within 0.01 mm.
 - Peg mode:
   - the pegged piece gains the peg volume and the other piece loses the hole volume (within 2 %);
-  - the pegged piece still fits the peg-adjusted U.
+  - the pegged piece fits bed − 2·margin (r10: a full cell plus its peg is over the peg-adjusted U
+    by design; on a 120 mm bed, U = 100 and the pegged piece is 110).
 - A pin STL lies flat: its bottom face area is at least 0.9 × flat width × (L − 2·ch_p).
 - Shortened pins go to separate files, and the counts add up to the number of connectors.
 - Calibration kit:
@@ -1913,6 +1924,46 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r10 — 2026-11-21 (Phase 7).** Found while planning and implementing Phase 7, agreed with the
+maintainer:
+
+- **What a pegged piece must fit** (I2, §6.1, the Phase 7 test). The plan said the pegged piece
+  fits the peg-adjusted U, which is impossible for a full cell: on a 120 mm bed U is 100, the
+  cell is 100 and the pegged piece 110. ADR-0005 reduces U precisely so that a cell plus its peg
+  fits the build volume, so cells fit U and final pieces fit `bed − 2·margin`
+  (`derived(cfg).printable`).
+- **`pin_chamfer < d/2`** (§7.5). A chamfer as wide as the radius can't be built, and the old
+  rule accepted one (d = 0.8 with the default 0.5).
+- **Calibration codes** (§6.3). Two digits at H_min are 6.75 mm wide, over the 6.4 mm pitch at
+  d = 2, and 0.123 and 0.124 both rounded to `12`. Codes now keep up to two decimals, shrink only
+  when they wouldn't fit, and clearances that would still read the same are an error.
+- **`tools` imports `connectors` and `grid`** (§3.1), for `hole_solids` and `fits`; no cycle.
+  Each piece is cut with its own side of the hole rather than one shared tool: same axis point,
+  same volume removed.
+- **Tools overlap the face by 0.01 mm** (`TOOL_OVERLAP`, §6.1), found by running every fixture
+  through the stage. A cut face's vertices can be a few ulps off its plane (29.499999999999993
+  for 29.5), so a peg based exactly on the plane stayed a separate shell on one torus piece, with
+  the right volume and `NoError`. `tools.check_piece` now also asserts the number of outer shells
+  (LIBRARY_NOTES, `manifold.face_float_noise`).
+- **`labels.py` starts here** with `text_outline` only, because the kit engraves its codes
+  before Phase 8. `calibrate` can't import `io`, so the CLI passes the resolved font path.
+
+Found by the Phase 7 review and fixed the conservative way. **These still await the maintainer's
+agreement**; each refuses a bad input with exit 1 and changes no output format:
+
+- **Pin file names** (§4.3 unchanged). `{L:.1f}` maps 15.25 and 15.15 to `l15.2`, and one pin was
+  silently lost. `tools.check_pin_names` now refuses it, in a dry run too. The alternative, more
+  decimals in the names, would change an output format.
+- **Calibration kit** (§6.3). A bar that doesn't fit the printable volume, an engraving reaching
+  a hole and holes that touch are refused: the polygon's vertices reach past the nominal wall,
+  and absurd values gave an exit 4 or an empty STL.
+- **`diameter` ≥ 0.1** (§7.5): thinner pins collapsed into empty or open meshes.
+
+Also from the review, with no new rule: only outer shells are counted (a hole may swallow a void
+the containment check tolerates, which made a valid model exit 4), and a pin's polygon has an edge
+towards the bed, cut where it is as wide as the round pin's flat, so the flat meets the area
+criterion at low segment counts.
 
 **r9 — 2026-11-19 (Phase 6).** Found while planning and implementing Phase 6, agreed with the
 maintainer:

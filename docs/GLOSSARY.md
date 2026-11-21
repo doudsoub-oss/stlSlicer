@@ -29,6 +29,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Piece** | One output part: a body in a cell, ID `X{i}-Y{j}-Z{k}` plus `-a`, `-b` for several bodies. A piece may have absorbed small pieces of neighbouring cells (`merged_from`). |
 | **Plane-local frame** | Coordinates attached to a cut plane: (u, v) on the plane, z along its normal. |
 | **Polylabel point** | The point of a polygon farthest from its boundary; used to order regions. |
+| **Printable volume** | What a final piece must fit, a peg included: bed − 2 × margin per axis, in every connector mode (invariant I2). 210 × 210 × 240 mm by default. |
 | **Reference volume** | The volume of the solid after repair, shell normalization and `--simplify`; later volume checks compare against it (invariant I3). |
 | **Region** | The area of a cut face: a polygon, possibly with holes, in the plane's (u, v), where the model is solid on both sides of the plane (`slice(o − ε) ∩ slice(o + ε)`), clipped to the two cells. |
 | **Safe region** | The region of a cut face inset by `w + r_h + ch_h` (5.1 mm by default): where a connector's axis may go, so the hole and its chamfer keep a wall of w on the face. The 3D checks then make sure the wall also holds behind the face. |
@@ -38,5 +39,5 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Slack** (of a plane) | How far a cut plane can move on each side while it stays between its neighbours and both cells it bounds still fit the usable volume. Nudging stays within it. |
 | **Small piece** | A piece with volume below V_small, merged into a neighbour when allowed. |
 | **Standard length** | One of the allowed pin lengths, L_max − k·Δ ≥ L_min (20, 18, 16 by default). A connector takes the longest one whose holes fit the material behind the face on both sides; shorter than L_max gives W002. |
-| **Usable volume** (U) | The space a piece may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode because pegs stick out of their piece. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |
+| **Usable volume** (U) | The space a grid cell may fill, per axis: bed − 2 × margin, minus L_max/2 in peg mode so that a full cell plus its peg still fits the printable volume. 210 × 210 × 240 mm by default (200 × 200 × 230 with pegs). |
 | **Void** | An empty space enclosed inside a solid, bounded by an inward-facing shell; repair keeps it. |

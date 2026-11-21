@@ -240,3 +240,46 @@ def test_truncated_binary_stl_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(InputError) as exc:
         io.load_stl(path, 1.0)
     assert "truncated.stl" in str(exc.value)
+
+
+# --- writing (Phase 7) ------------------------------------------------------------------------
+
+
+def test_write_stl_files_creates_folders_and_a_binary_stl(tmp_path: Path) -> None:
+    mesh = manifold_to_trimesh(cube())
+    io.write_stl_files(tmp_path, {"dowels/dowel_d5.0_l20.0.stl": mesh})
+    path = tmp_path / "dowels" / "dowel_d5.0_l20.0.stl"
+    data = path.read_bytes()
+    assert data[:80] == b"\x00" * 80  # no timestamp in the header (ADR-0010)
+    assert struct.unpack("<I", data[80:84])[0] == len(mesh.faces)
+    loaded, _ = io.load_stl(path, 1.0)
+    assert loaded.volume == pytest.approx(1000.0)
+
+
+def test_write_text_file_is_utf8_with_unix_line_ends(tmp_path: Path) -> None:
+    io.write_text_file(tmp_path, "calibration/README.md", "first ±\nsecond\n")
+    assert (tmp_path / "calibration" / "README.md").read_bytes() == "first ±\nsecond\n".encode()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("notes.txt", id="not-owned"),
+        pytest.param("other/block.stl", id="not-owned-folder"),
+        pytest.param("../calibration/block.stl", id="parent"),
+        pytest.param("calibration/../../block.stl", id="escapes-through-an-owned-folder"),
+    ],
+)
+def test_writers_only_write_owned_outputs(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError, match="owned"):
+        io.write_text_file(tmp_path, name, "text")
+    with pytest.raises(ValueError, match="owned"):
+        io.write_stl_files(tmp_path, {name: manifold_to_trimesh(cube())})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_failure_is_an_input_error(tmp_path: Path) -> None:
+    (tmp_path / "calibration").write_text("a file where the folder should go")
+    with pytest.raises(InputError, match="can't write") as exc:
+        io.write_text_file(tmp_path, "calibration/README.md", "text")
+    assert exc.value.exit_code == ExitCode.INVALID_INPUT

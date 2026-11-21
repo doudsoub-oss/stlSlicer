@@ -350,6 +350,8 @@ def hole_solid(
     radius: float,
     chamfer: float,
     segments: int,
+    *,
+    overlap: float = 0.0,
 ) -> Manifold:
     """Return a blind hole drilled from a cut plane into one side, with its mouth chamfer.
 
@@ -374,34 +376,61 @@ def hole_solid(
         radius: Bore radius, mm (r_h for a hole, r_h + w for the containment probe; > 0).
         chamfer: Mouth chamfer, mm (ch_h); 0 for none.
         segments: Polygon sides (``advanced.circular_segments``, ≥ 3).
+        overlap: How far the solid also reaches past the plane, at the mouth's radius, mm. The
+            tools cut with ``TOOL_OVERLAP`` so that no cutter face is coplanar with the cut
+            face; the collision check uses 0, the hole's real shape.
 
     Returns:
         The hole, cutting frame.
 
     Raises:
         ValueError: If ``side`` is not ±1, ``depth``, ``radius`` or ``segments`` is out of range,
-            or ``chamfer < 0``.
+            or ``chamfer`` or ``overlap`` is negative.
     """
-    if side not in (-1, 1) or depth <= 0 or radius <= 0 or chamfer < 0 or segments < 3:
+    if (
+        side not in (-1, 1)
+        or depth <= 0
+        or radius <= 0
+        or chamfer < 0
+        or segments < 3
+        or overlap < 0
+    ):
         raise ValueError(
             f"invalid hole: side={side}, depth={depth}, radius={radius}, chamfer={chamfer}, "
-            f"n={segments}"
+            f"n={segments}, overlap={overlap}"
         )
     factor = 1.0 / math.cos(math.pi / segments)
     bore = radius * factor
     height = min(chamfer, depth)
     mouth = (radius + chamfer) * factor
     # The profile in (radius, z), counter-clockwise, for a hole from z = 0 up to z = depth.
-    profile = [(0.0, 0.0), (mouth, 0.0)]
+    profile = [(0.0, -overlap), (mouth, -overlap)]
+    if overlap > 0 and height > 0:
+        profile.append((mouth, 0.0))
     if height > 0:
         profile.append(((radius + chamfer - height) * factor, height))
     profile += [(bore, depth), (0.0, depth)]
     if side < 0:  # mirrored to run from z = 0 down to −depth, still counter-clockwise
         profile = [(r, -z) for r, z in reversed(profile)]
-    outline = np.array(profile, dtype=np.float64)
-    local = Manifold.revolve(CrossSection([outline]), segments)
-    local = local.translate((uv[0], uv[1], offset))
+    local = revolved(profile, segments).translate((uv[0], uv[1], offset))
     return local.transform(local_to_world(axis))
+
+
+def revolved(profile: Sequence[tuple[float, float]], segments: int) -> Manifold:
+    """Return the solid of revolution of a profile about the z axis.
+
+    One ``Manifold.revolve``, with no boolean to evaluate (docs/LIBRARY_NOTES.md,
+    ``manifold.revolve_hole``), and a vertex at angle 0 on +x.
+
+    Args:
+        profile: The outline as (radius, z) points, mm, counter-clockwise, radii ≥ 0.
+        segments: Polygon sides (``advanced.circular_segments``).
+
+    Returns:
+        The solid, in the frame of the profile.
+    """
+    outline = np.array(profile, dtype=np.float64)
+    return Manifold.revolve(CrossSection([outline]), segments)
 
 
 def local_point(axis: Axis, u: float, v: float, z: float) -> Point3:
