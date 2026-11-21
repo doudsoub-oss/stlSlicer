@@ -27,6 +27,8 @@ Common cases:
 | `--config my.toml: can't read it` | The file doesn't exist or isn't readable | Check the path |
 | `--config my.toml: not valid UTF-8 text` | The file was saved in another encoding | Save it as UTF-8 (or UTF-16 with a byte order mark) |
 | `advanced.label_font: no such font file` | The font is neither a font bundled with matplotlib nor an existing absolute path | Use the default `DejaVuSans-Bold.ttf` or an absolute path |
+| `advanced.label_font: can't read FILE as a font` | The file exists but isn't a font | Use the default `DejaVuSans-Bold.ttf` or a real TrueType font |
+| `advanced.label_font: FONT has no glyph for these characters`, or `draws several of these characters with the same glyph` | A symbol or placeholder font: its labels would be unreadable | Use a text font with digits, `-`, `.` and a to z |
 | `INPUT model.stl: no such file` | The input path is wrong | Check the path |
 | `INPUT model.stl: no triangles found` | The file is empty, isn't an STL, or is an STL without facets | Export the model again as STL |
 | `--simplify (model.simplify): a tolerance of 1000 mm removed the whole model` | The `--simplify` tolerance is as large as the model | Use a much smaller tolerance (a few hundredths of a mm is typical), or none |
@@ -123,7 +125,16 @@ a face takes an 18 mm pin, not a 20 mm one. Only the standard lengths are used (
 Nothing to do: print the pins the output lists. In peg mode, the peg itself is shorter.
 
 ### W003 — Label skipped (warning)
-TODO (Phase 8)
+None of the piece's cut faces has room for its ID at the minimum text height (4 mm by default).
+The piece is still valid and connects as usual: only its engraved ID is missing, so note which
+piece it is from the message. A label needs, on one face:
+- room for the text, at least `min_wall` from the face's edge and clear of the connectors (a
+  `1-0-2b` label at 4 mm is about 18 × 4 mm);
+- `labels.depth + min_wall` of material behind it (2.6 mm by default), so thin plates, surfaces
+  sloping close to the face and voids just behind it don't count.
+
+To get a label, lower `advanced.label_min_height` or `--min-wall`, or use fewer connectors with
+`--max-connectors-per-face`.
 
 ### W004 — Small piece left on its own (warning)
 A piece smaller than `small_piece_volume` (500 mm³ by default) couldn't be merged into a

@@ -468,22 +468,44 @@ def crosssection_from_contours(contours: Iterable[ArrayLike]) -> CrossSection:
     return CrossSection(arrays, FillRule.EvenOdd)
 
 
+def crosssection_from_polygons(shape: BaseGeometry) -> CrossSection:
+    """Build a cross-section from shapely polygons, their holes included.
+
+    Args:
+        shape: A polygon or multipolygon whose parts don't overlap, (u, v) in mm.
+
+    Returns:
+        The cross-section (EvenOdd, so the rings' orientation doesn't matter: a mirrored
+        outline has them reversed).
+    """
+    contours = [
+        np.asarray(ring.coords, dtype=np.float64)[:-1]
+        for polygon in polygon_parts(shape)
+        for ring in (polygon.exterior, *polygon.interiors)
+    ]
+    return crosssection_from_contours(contours)
+
+
 def _signed_area(contour: NDArray[np.float64]) -> float:
     x, y = contour[:, 0], contour[:, 1]
     return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
 
 
-def crosssection_to_polygons(section: CrossSection) -> list[Polygon]:
+def crosssection_to_polygons(section: CrossSection, ordered: bool = True) -> list[Polygon]:
     """Convert a cross-section to shapely polygons, one per connected component.
 
     Args:
         section: 2D cross-section, (u, v) in mm.
+        ordered: Sort by polylabel point. Glyphs and label masks pass False: their order
+            doesn't matter, and polylabel is slow on thin shapes.
 
     Returns:
         Polygons with holes, sorted by their polylabel point (u, then v), the region order of
-        §4.3. Outer contours have positive area in manifold3d, holes negative.
+        §4.3; in ``decompose()`` order when not ``ordered``. Outer contours have positive area
+        in manifold3d, holes negative.
     """
-    return sorted_by_polylabel(_polygons(section))
+    polygons = _polygons(section)
+    return sorted_by_polylabel(polygons) if ordered else polygons
 
 
 def _polygons(section: CrossSection) -> list[Polygon]:
@@ -650,17 +672,20 @@ def overlap_area(first: CrossSection, second: CrossSection) -> float:
     return float((first ^ second).area())
 
 
-def grow(section: CrossSection, delta: float) -> CrossSection:
+def grow(section: CrossSection, delta: float, segments: int = 0) -> CrossSection:
     """Return a cross-section grown outwards by ``delta`` mm, with round corners.
 
     Args:
         section: Cross-section, (u, v) in mm.
-        delta: Growth, mm (> 0).
+        delta: Growth, mm (> 0). The corners are polygons with their vertices at ``delta``, so
+            their flats fall short of it.
+        segments: Polygon sides of a full round corner; 0 for manifold3d's default, which
+            depends on ``delta``.
 
     Returns:
         The grown cross-section.
     """
-    return section.offset(delta, JoinType.Round)
+    return section.offset(delta, JoinType.Round, circular_segments=segments)
 
 
 def prism(footprint: CrossSection, axis: Axis, low: float, high: float) -> Manifold:

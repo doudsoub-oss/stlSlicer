@@ -1,13 +1,13 @@
-"""Tool solids: holes, pegs and pins, applied with one batched boolean per piece.
+"""Tool solids: holes, labels, pegs and pins, applied with one batched boolean per piece.
 
-Stage of the pipeline after the connector placement (PLAN.md §5.1, Phase 7). ``apply`` takes
-the pieces, their faces and the placed connectors (cutting frame, mm) and returns the drilled
-and pegged pieces, with the loose pins grouped by diameter and length.
+Stage of the pipeline after the labels (PLAN.md §5.1, Phases 7 and 8). ``apply`` takes the
+labelled pieces, their faces and the placed connectors (cutting frame, mm) and returns the
+drilled, engraved and pegged pieces, with the loose pins grouped by diameter and length.
 
-For each piece: the holes are united once and subtracted once, then the pegs are united once
-and added once. The holes are ``connectors.hole_solids``, the very solids the collision check
-measured (ADR-0014), one per side from the same axis point, so they line up by construction.
-Pegs are added after the holes are cut, so a hole can never eat a peg.
+For each piece: the holes and the label are united once and subtracted once, then the pegs are
+united once and added once. The holes are ``connectors.hole_solids``, the very solids the
+collision check measured (ADR-0014), one per side from the same axis point, so they line up by
+construction. Pegs are added after the cuts, so a hole can never eat a peg.
 
 Every tool reaches ``TOOL_OVERLAP`` past the cut face, because a face's vertices can be off its
 plane by float noise: a peg based exactly on the plane can miss the face and stay a separate
@@ -33,7 +33,7 @@ from manifold3d import Error, Manifold
 from stlsplit import config, connectors, geometry, grid
 from stlsplit.config import TOOL_OVERLAP, TOOL_VOLUME_TOLERANCE, Config
 from stlsplit.errors import ConfigError
-from stlsplit.models import Connector, CutFace, Piece
+from stlsplit.models import Connector, CutFace, Label, Piece
 
 _LAY_DOWN = np.array(
     [[0.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]], dtype=np.float64
@@ -75,10 +75,11 @@ class Applied(NamedTuple):
 def apply(
     pieces: Sequence[Piece], faces: Sequence[CutFace], placed: Sequence[Connector], cfg: Config
 ) -> Applied:
-    """Cut every hole and add every peg, with one batched boolean per piece.
+    """Cut every hole and label and add every peg, with one batched boolean per piece.
 
     Args:
-        pieces: The pieces, cutting frame (``cutting.cut``). They are not modified.
+        pieces: The pieces, cutting frame (``labels.layout``, or ``cutting.cut`` without
+            labels). They are not modified.
         faces: Their cut faces.
         placed: The connectors (``connectors.place``).
         cfg: The configuration.
@@ -96,32 +97,71 @@ def apply(
         cutters = connectors.hole_solids(connector, face, cfg, overlap=TOOL_OVERLAP)
         exact = connectors.hole_solids(connector, face, cfg)
         for (piece_id, cutter), (_, hole) in zip(cutters, exact, strict=True):
-            tooling[piece_id].holes.append(cutter)
-            tooling[piece_id].holes_volume += hole.volume()
+            tooling[piece_id].cuts.append(cutter)
+            tooling[piece_id].cuts_volume += hole.volume()
         if connector.kind == "peg":
             entry = tooling[face.piece_neg]
             entry.pegs.append(peg_solid(connector, face, cfg, overlap=TOOL_OVERLAP))
             entry.pegs_volume += peg_solid(connector, face, cfg).volume()
+    for piece in pieces:
+        if piece.label is not None:
+            face = by_id[piece.label.face_id]
+            side = -1 if face.piece_neg == piece.id else 1
+            entry = tooling[piece.id]
+            entry.cuts.append(label_solid(piece.label, face, side, cfg, overlap=TOOL_OVERLAP))
+            entry.cuts_volume += piece.label.outline.area * cfg.labels.depth
     done = [_apply_to_piece(piece, tooling[piece.id], cfg) for piece in pieces]
     return Applied(pieces=done, pins=pin_groups(placed, cfg))
 
 
 @dataclass
 class _Tooling:
-    """One piece's tools, which overlap its face, and the volumes they should change."""
+    """One piece's tools, which overlap its face, and the volumes they should change.
 
-    holes: list[Manifold] = field(default_factory=list)
+    ``cuts`` are its holes and its label: everything the one subtraction removes.
+    """
+
+    cuts: list[Manifold] = field(default_factory=list)
     pegs: list[Manifold] = field(default_factory=list)
-    holes_volume: float = 0.0
+    cuts_volume: float = 0.0
     pegs_volume: float = 0.0
 
 
 def _apply_to_piece(piece: Piece, tooling: _Tooling, cfg: Config) -> Piece:
     body = piece.body
-    drilled = body - geometry.union_all(tooling.holes) if tooling.holes else body
+    drilled = body - geometry.union_all(tooling.cuts) if tooling.cuts else body
     final = drilled + geometry.union_all(tooling.pegs) if tooling.pegs else drilled
-    check_piece(piece.id, body, drilled, final, tooling.holes_volume, tooling.pegs_volume, cfg)
+    check_piece(piece.id, body, drilled, final, tooling.cuts_volume, tooling.pegs_volume, cfg)
     return replace(piece, body=final)
+
+
+def label_solid(
+    label: Label, face: CutFace, side: int, cfg: Config, *, overlap: float = 0.0
+) -> Manifold:
+    """Return a label's engraving: its outline extruded from the face into the piece.
+
+    Engraved, never embossed: an embossed label would collide with the mating piece (Phase 8,
+    task 6).
+
+    Args:
+        label: The label; its outline is already mirrored for its side.
+        face: Its cut face.
+        side: −1 if the piece is the face's neg piece (it lies towards local z < offset), +1
+            for the pos piece.
+        cfg: The configuration (``labels.depth``).
+        overlap: How far it also reaches past the face, mm: ``TOOL_OVERLAP`` for the cutter,
+            0 for the part that is really removed.
+
+    Returns:
+        The solid, cutting frame.
+    """
+    offset, depth = face.plane.offset, cfg.labels.depth
+    low, high = (
+        (offset - depth, offset + overlap) if side < 0 else (offset - overlap, offset + depth)
+    )
+    return geometry.prism(
+        geometry.crosssection_from_polygons(label.outline), face.plane.axis, low, high
+    )
 
 
 def peg_solid(
@@ -287,10 +327,10 @@ def check_piece(
     Args:
         piece_id: For the message.
         before: The body before the tools.
-        drilled: After the holes.
+        drilled: After the holes and the label.
         final: After the pegs too.
-        holes_volume: Volume of its holes, mm³. Placement keeps them inside the piece and
-            apart from each other.
+        holes_volume: Volume of its holes and its label, mm³. Placement and the label layout
+            keep them inside the piece and apart from each other.
         pegs_volume: Volume of its pegs, mm³.
         cfg: The configuration.
 

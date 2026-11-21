@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r10** (2026-11-21); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r11** (2026-11-21); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -71,7 +71,7 @@ what surprised you, what to watch.
 | 5 | Connector placement | done | `f935d6f` | For Phase 6: `cli._run` now runs `connectors.place` after the cutting, then stops with a "not implemented yet (Phase 6 onwards)" warning. Nudging goes between `grid.even_grid` and `cutting.cut`; its scores can use `geometry.cut_region` and `connectors.safe_region(region, cfg)` (a `MultiPolygon`, possibly empty). `grid` may import `connectors`: it imports only `geometry`, `config`, `errors` and `models`. For Phase 7: cut the holes with `geometry.hole_solid` (bore r_h plus mouth chamfer, radii compensated), the shape the collision check used; `connectors.hole_solids(connector, face, cfg)` gives them per piece; a peg stands on the neg piece (`hole_depth_neg = 0`). Plan changes in Appendix E r8: face order, not ID string order; farthest-point sampling from the accepted connectors; at most 256 trials per face (`MAX_CANDIDATE_TRIALS`); `connectors.length` ≤ max(bed X, bed Y) (a bound by U would have broken the margin boundary test); depths measured from the face; `min_gap` compared with `LENGTH_TOLERANCE` (it gives 1.999999999999993 for 2 mm); W002 once per face; `wide_u_shape` fixture. **manifold3d booleans are lazy**: the cost shows at the first query (a cylinder-plus-cone union cost 3 ms there), so holes are revolved (0.14 ms), and `_too_close` checks bounding boxes and a ray cast along the axis before `min_gap` (2 ms on crossing solids). Performance: placement takes 1.5 s on the 2×2×2 cube (541 trials for 48 connectors). The review found no correctness bug, and one item for Phase 10: the containment fallback tries every standard length, so with `pin_length_step = 0.1` and a 60 mm pin (451 lengths) a rejected candidate costs about 330 ms and a face where all 256 trials fail about 84 s. A binary search over the lengths would fix it, but take care at the 1e-6 tolerance edge, where containment isn't monotonic in L. |
 | 6 | Plane nudging | done | `e6bdb67` | For Phase 7: `cli._run` now runs `grid.nudge` between `grid.even_grid` and `cutting.cut`, then stops with a "not implemented yet (Phase 7 onwards)" warning: replace that stub with `tools.apply`. Cells are no longer all equal once a plane moves; everything downstream must take bounds from `grid.axis_bounds` / `grid.cell_bounds`, never `extent / n`. Plan changes in Appendix E r9: a plane stays strictly between its neighbours (`grid.check_fits` also asserts increasing bounds); `grid.cell_pairs` is shared by nudging and `cutting.cut_faces`; scoring calls `geometry.cut_region` and `clip_to_cells` with `ordered=False` (the polylabel sort was 97 % of the time: hollow sphere 4.9 s, now 0.11 s); scoring stops at the first (0, 0) score; `nudge_window / nudge_step` ≤ 100 (`MAX_NUDGE_STEPS`), with the window counted in steps (`derived(cfg).nudge_steps`); the example test command is now `tests/unit/test_nudge.py -k slack`. **The score is 2D**: moved just off a neck, a plane leaves a thin slab on the neck side, so `tall_figure` still gets W001 from the 3D checks (0.5 mm of box under the neck); a depth-aware score is a Phase 10 or v2 question (ADR-0003, "Consequences"). Performance: a 1M-triangle hollow sphere, where every position is scored (63), takes 2.1 s; at the 100-step limit one plane costs up to 201 scores, about 7 s at 1M triangles. The review found one bug (a tiny `nudge_step` overflowed, exit 4, or ran out of memory), fixed by the step limit and tested. |
 | 7 | Tool solids, booleans, dowels, calibration kit | done | `b760e4d` | For Phase 8: `cli._run` now runs `tools.apply` after `connectors.place`, writes `dowels/`, then stops with a "not implemented yet (Phase 8 onwards)" warning; the labels go between the placement and `tools.apply`, and their solids join the piece's one subtraction (`tools._apply_to_piece`, with their volume in `check_piece`). `labels.text_outline(text, height, font)` exists (centred, EvenOdd); `labels` can't import `io`, so the CLI passes the font path. **Any tool must reach `TOOL_OVERLAP` past a cut face**: its vertices can be a few ulps off the plane, and a peg based exactly on it stayed a separate shell (`manifold.face_float_noise`). For Phase 9: write `Applied.pieces` with `io.write_stl_files`, which refuses names outside `OWNED_OUTPUTS`. Final pieces fit `derived(cfg).printable` (bed − 2·margin), cells fit U (r10). The review added exit 1 refusals, agreed with the maintainer (Appendix E, r10): pin lengths sharing a file name, a kit that doesn't fit or whose walls fail, `diameter` ≥ 0.1. The review also found an older bug, fixed here: `--force` deleted an input inside an owned folder; `io.check_force_keeps` now refuses it (§7.6). |
-| 8 | Labels | todo | | |
+| 8 | Labels | done | `53624bc` | For Phase 9: `cli._run` now runs `labels.layout` after the placement and `tools.apply` engraves the labels, then stops with a "not implemented yet (Phase 9 onwards)" warning. `Applied.pieces` carry `Piece.label` (`text`, `face_id`, `outline`, `height`) for `assembly.json`; a piece can have none (W003, W008 or `--no-label`). Plan changes in Appendix E r11, all agreed with the maintainer: a label needs `labels.depth + min_wall` of material behind it (the literal spec made `tall_figure` exit 4); faces, then up to 256 positions per region part, are tried before W003; the anchor is centred on long faces (`u_shape` and a T-beam got false W003s); the guard's round corners are compensated; a run that draws text refuses a font that can't draw the labels (exit 1), while `--print-config` and `--no-label` don't read its content. `labels` imports `connectors`. Thin shells get W003 by design: a 2 mm hollow sphere has no label, since its wall is under the 2.6 mm backing. Checked after the review: 276 runs on 69 models (dowel, peg, none, depth 1.9) with no label-related exit 4. |
 | 9 | Assembly order, export, assembly map, preview | todo | | |
 | 10 | Robustness and performance | todo | | |
 | 11 | End-to-end suite, docs completion, v1.0 and handover | todo | | |
@@ -236,7 +236,7 @@ stlsplit/
 | `connectors` | Connector placement (2D candidates + 3D checks) | `geometry` |
 | `grid` | Usable volume, auto-orient, even grid, plane nudging | `geometry`, `connectors` (for `safe_region`) |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` (r7) |
-| `labels` | Text outlines and layout on a face | `geometry` |
+| `labels` | Text outlines and layout on a face | `geometry`, `connectors` (`hole_solids`; r11) |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (`hole_solids`), `grid` (`fits`) (r10) |
 | `calibrate` | Calibration kit | `tools`, `labels` |
 | `assembly` | Assembly order; JSON and Markdown content; preview scene | `models`, `config` |
@@ -506,6 +506,9 @@ a default means changing it here, in `config.py` and in `docs/CONFIGURATION.md`,
 | ε_ray | Ray start offset inside a piece | constant `RAY_START_OFFSET` | 0.01 |
 | ε_tool | How far hole cutters and pegs reach past a cut face (r10) | constant `TOOL_OVERLAP` | 0.01 |
 | keep-out | Label keep-out radius around a connector | `r_h + ch_h + w` | 5.1 |
+| label backing | Material required behind a label, measured from the face (r11) | `t_lab + w` | 2.6 |
+| anchor slack | Clearance a label's anchor may give up to sit nearest the centroid (r11) | constant `LABEL_ANCHOR_SLACK` | 0.01 |
+| label positions | Fallback positions per region part, on a grid of step `H_min / LABEL_ANCHOR_GRID_DIVISOR` (r11) | constant `LABEL_MAX_ANCHORS` | 256, step 2 mm |
 | r_probe | Radius of the circle of depth rays and of the containment cylinder (r8) | `r_h + w` | 4.7 |
 | ray length | Length of the depth rays (r8) | `h(L_max) + w + RAY_LENGTH_MARGIN` (1 mm) | 13.5 |
 | T_max | Candidates of a face that go through the 3D checks at most (r8) | constant `MAX_CANDIDATE_TRIALS` | 256 |
@@ -648,7 +651,9 @@ the key.
   `nudge_window` ≥ 0; `nudge_step` > 0 and `nudge_window / nudge_step` ≤ 100 (r9);
   0 < `section_epsilon` ≤ 0.1; `small_piece_volume` ≥ 0;
   0 < `label_min_height` ≤ `label_max_height`; `calibration_clearances` has 1 to 10 values, each
-  ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file.
+  ≥ 0, strictly increasing; `preview_spread` ≥ 0; `label_font` resolves to an existing file and, in
+  any run that draws text (a split or dry run with labels on, or `--calibrate`), is a readable font
+  with its own glyph for each digit, `-`, `.` and a to z (r11).
 - Modes: exactly one of `INPUT`, `--calibrate` or a bare `--print-config` (`--print-config` with
   `INPUT` or `--calibrate` is an error); `--dry-run` needs `INPUT`; `-o` present unless
   `--dry-run` or `--print-config` (with `--dry-run` it is accepted and ignored).
@@ -1535,12 +1540,16 @@ generate the calibration kit.
 **Goal.** Engrave each piece's short ID on one of its cut faces, readable from outside the piece and
 never touching a connector.
 
-**Files.** `labels.py`, `tests/unit/test_labels.py`, `tests/integration/test_labels.py`.
+**Files.** `labels.py`, `tests/unit/test_labels.py`, `tests/integration/test_labels.py`; also
+`models.py`, `config.py`, `geometry.py`, `tools.py`, `io.py`, `cli.py` and `scripts/api_spike.py`
+(r11).
 
 **Tasks.**
 1. Text: `X1-Y0-Z2-b` becomes `1-0-2b`.
 2. Region on each of the piece's faces: `region.buffer(−w)` minus a disk of radius keep-out around
-   every connector of that face. Choose the face with the largest region (ties: face ID).
+   every connector of that face, minus every point closer than w to a spot without `t_lab + w` of
+   material behind the face, holes counted (r11). Try the faces by decreasing region area (ties:
+   face ID) until the text fits (r11).
 3. Glyphs:
    - Use `TextPath` with the bundled `DejaVuSans-Bold.ttf`, loaded **by file path** so every
      machine uses the same font. At 4 mm text height the regular weight's strokes are 0.52 mm
@@ -1548,10 +1557,14 @@ never touching a connector.
    - Build the solid with `CrossSection(contours, FillRule.EvenOdd)`. The default Positive rule
      erased the glyph "0" entirely at plan time, because TrueType outer contours are clockwise.
 4. Layout:
-   - The anchor is the polylabel point of the largest part of the region.
+   - The anchor is the point of the largest part of the region that has the polylabel point's
+     clearance (within `LABEL_ANCHOR_SLACK`) and is nearest the part's centroid (r11).
    - Binary-search the text height between H_min and H_max (12 iterations), at 0° and 90°, accepting
      a size when `region.contains(text)`.
-   - Keep the largest height (0° on ties). If nothing fits: W003, no label.
+   - Keep the largest height (0° on ties).
+   - If H_min doesn't fit at the anchor, try each part of the region, largest first: its anchor,
+     then up to `LABEL_MAX_ANCHORS` grid points by distance to it, keeping the first that fits (r11).
+   - If nothing fits on any face: W003, no label.
 5. Orientation: faces of neg pieces are seen from +z (no mirroring), faces of pos pieces from −z
    (mirror in u).
 6. Solid: extrude to `labels.depth` into the piece, map it with the plane frame, and add it to the
@@ -1925,6 +1938,31 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `chiral_l` | Corner cube with arms of 3, 2 and 1 cubes along X, Y and Z (a flat L would be its own mirror image) | No mirroring (r6) |
 
 ## Appendix E — Plan revisions
+
+**r11 — 2026-11-21 (Phase 8).** Found while planning and implementing Phase 8, agreed with the
+maintainer:
+
+- **Material behind a label** (Phase 8, task 2; §6.1). The plan only checked the face in 2D. Where
+  a piece is thinner than the engraving, the text went through it, the counters of `0`, `8` and
+  `b` came off as separate shells and the run exited 4; the `tall_figure` fixture does this. A
+  label now needs `t_lab + w` of material behind it, holes counted, and stays w away from any
+  spot that lacks it.
+- **Next face before W003** (task 2). Only the largest region was tried, so a piece could get
+  W003 with room on a smaller face. Faces are now tried by decreasing area.
+- **Centred anchor** (task 4). On a long face every point of the middle line ties for the
+  polylabel point, and the library returns one near an end (a 100 × 8 face gets (4, 4)), so the
+  text ran off the face and all four pieces of `u_shape` got a false W003. The anchor is now the
+  point with that clearance (within `LABEL_ANCHOR_SLACK`) nearest the part's centroid.
+- **Fallback positions** (task 4). Found by the review: one anchor in one part still gave false
+  W003s. At a T junction the text overflows both arms (a T-beam got no label), and a thin largest
+  part hid a smaller one with room. When H_min doesn't fit at the anchor, each part tries up to
+  256 grid positions nearest its anchor; a label that fits at the anchor doesn't move.
+- **The wall is measured at the flats** (task 2). The round corners of the material guard had
+  their vertices at w, so their flats fell up to 29 % short of it. They are now compensated.
+- **`label_font` must be able to draw the labels** (§7.5). A file that wasn't a font exited 4, and
+  16 of matplotlib's 40 bundled fonts (symbols, Last Resort) exited 0 with unreadable text. Runs
+  that draw text now exit 1. `--print-config` and `--no-label` runs don't read the font's content.
+- **`labels` imports `connectors`** (§3.1), for `hole_solids`; no cycle.
 
 **r10 — 2026-11-21 (Phase 7).** Found while planning and implementing Phase 7, agreed with the
 maintainer:

@@ -591,7 +591,63 @@ vertices reach r / cos(π / n), so these two checks measure from there.
 **Tests:** `tests/integration/test_tools.py`, `tests/integration/test_calibrate.py`.
 
 ## Label layout
-TODO (Phase 8)
+
+**Inputs:** the pieces, their cut faces and the connectors (cutting frame, mm), the
+configuration and the font file. **Outputs:** each piece with its `Label` (text, face, outline in
+plane-local (u, v), height), and one W003 per piece that has a cut face but no room.
+`labels.layout`; `tools.apply` engraves the result.
+
+**Text.** The grid digits and the suffix: `X1-Y0-Z2-b` reads `1-0-2b`. Glyphs come from
+`TextPath` with `DejaVuSans-Bold.ttf`, loaded by file path so every machine draws the same
+outline, and are filled with EvenOdd because TrueType outer contours are clockwise (ADR-0009).
+
+**Where a label may go** (`label_region`), on each of the piece's faces:
+
+1. the region inset by w (2 mm);
+2. minus a disk of radius r_h + ch_h + w (5.1 mm) around each connector of that face;
+3. minus every point closer than w to a spot that lacks t_lab + w (2.6 mm) of material behind the
+   face. A probe the shape of the region goes that deep into the drilled piece; what it finds
+   missing (a thin plate, a sloped surface, a void, a hole of another face) is projected on the
+   face and grown by w. The round corners are compensated, so their flats are at w.
+
+Step 3 is what keeps an engraving from going through the piece: the counters of `0`, `8` and `b`
+would come off as loose shells, and the piece would fail its check (exit 4).
+
+**Choosing the face.** Faces are tried by decreasing area of that region (ties: face ID) until
+the text fits. W003 means that none has room.
+
+**Fitting the text** (`fit_text`):
+
+- The anchor (`label_anchor`) is the point of the region's largest part with the clearance of its
+  polylabel point, within 0.01 mm, nearest the part's centroid. The polylabel point alone won't
+  do: on a long face every point of the middle line ties, and the library returns one near an
+  end, so a 100 × 8 face would get (4, 4) and the text would run off it.
+- The height is bisected between H_min and H_max (12 steps), at 0° and at 90°. A size is accepted
+  when the region contains the text. Containment isn't always monotonic in the height, so only
+  sizes actually tested are kept.
+- The largest height wins, 0° on a tie.
+- If not even H_min fits at the anchor (at a T junction it overflows both arms), each part of the
+  region, largest first, tries its anchor and then up to 256 grid points (step H_min / 2) by
+  distance to it, and the first position that fits is kept. A label that fits at the anchor
+  never moves.
+
+**Viewing side.** The neg piece's face is seen from +z, so its text is drawn as is. The pos
+piece's face is seen from −z, where u runs the other way, so its text is mirrored in u about the
+anchor, before the containment test: the shape tested is the shape engraved.
+
+**Engraving** (`tools.label_solid`). The outline is extruded `labels.depth` into the piece and
+reaches `TOOL_OVERLAP` past the face. It joins the piece's holes in the one subtraction, and its
+volume counts in `check_piece`. Labels are engraved, not embossed, since embossing would collide
+with the mating piece.
+
+**Font.** A run that draws text refuses (exit 1) a file that isn't a font, or one without its own
+glyph for each digit, `-`, `.` and a to z (`io.check_label_font`).
+
+**Edge cases.** A piece without a cut face gets no label (W008), and labels never go on exterior
+surfaces. With `--no-label` nothing is laid out or reported. Both pieces of a face may label it:
+their engravings don't touch, each being in its own piece.
+
+**Tests:** `tests/unit/test_labels.py`, `tests/integration/test_labels.py`.
 
 ## Assembly order
 TODO (Phase 9)

@@ -8,13 +8,14 @@ directory (§7.6), runs the stages and turns their diagnostics into the exit cod
 Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to stderr; the
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
-Load, repair, orientation, grid, cutting, connector placement and the tools run before the
-output directory is prepared, so an unusable input never creates the directory, and
+Load, repair, orientation, grid, cutting, connector placement, labels and the tools run before
+the output directory is prepared, so an unusable input never creates the directory, and
 ``--force`` never deletes the previous outputs for it. The calibration kit is likewise built
 before its directory is prepared.
 
-Phase 7: a split writes the loose pins (``dowels/``), and ``--calibrate`` is complete. The
-stages after the tools don't exist yet, so the split and dry-run modes end with a warning.
+Phase 8: pieces are labelled and engraved; a split writes the loose pins (``dowels/``), and
+``--calibrate`` is complete. The stages after the tools don't exist yet, so the split and
+dry-run modes end with a warning.
 """
 
 import argparse
@@ -41,6 +42,7 @@ from stlsplit import (
     geometry,
     grid,
     io,
+    labels,
     repair,
     tools,
 )
@@ -438,6 +440,8 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if mode is Mode.PRINT_CONFIG:
         sys.stdout.write(config.to_toml(cfg))
         return ExitCode.SUCCESS
+    if mode is Mode.CALIBRATE or cfg.labels.enabled:  # the runs that draw text
+        io.check_label_font(io.resolve_label_font(cfg.advanced.label_font))
     if mode is not Mode.DRY_RUN and "force" in ns:  # before any work: a dry run deletes nothing
         io.check_force_keeps(ns.output, _files_read(ns, cfg))
     if mode is Mode.CALIBRATE:
@@ -486,6 +490,14 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     )
     exit_code = max(exit_code, report_diagnostics(placement.diagnostics))
     tools.check_pin_names(placement.connectors)  # here, so a dry run refuses what a split would
+    with stage("labels"):
+        font = io.resolve_label_font(cfg.advanced.label_font)
+        labelled = labels.layout(result.pieces, result.faces, placement.connectors, cfg, font)
+    result = result._replace(pieces=labelled.pieces)
+    if cfg.labels.enabled:
+        count = sum(piece.label is not None for piece in result.pieces)
+        LOGGER.info("labels: %d of %s", count, _plural(len(result.pieces), "piece"))
+    exit_code = max(exit_code, report_diagnostics(labelled.diagnostics))
     if mode is Mode.DRY_RUN:
         sys.stdout.write(dry_run_report(orientation, layout, result, placement))
         if "output" in ns:
@@ -498,7 +510,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         with stage("pins"):
             _write_pins(ns.output, applied.pins)
     LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 8 onwards); stopping here",
+        "the %s mode is not implemented yet (PLAN.md Phase 9 onwards); stopping here",
         mode.value,
     )
     return exit_code
@@ -547,14 +559,15 @@ def dry_run_report(
     """Return the plan the dry run prints on stdout (PLAN.md §7.1, Phase 3 task 7). ASCII only.
 
     It grows as phases land: the orientation and the grid (Phase 3), the pieces and cut faces
-    (Phase 4), then the connectors and the loose pins grouped by diameter and length, longest
-    first (Phase 5; pegs are part of their piece, so they aren't pins). Numbers are rounded to
-    ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros (§4.1).
+    (Phase 4), the connectors and the loose pins grouped by diameter and length, longest
+    first (Phase 5; pegs are part of their piece, so they aren't pins), then the labels
+    (Phase 8). Numbers are rounded to ``OUTPUT_DECIMALS`` (6) decimals, without trailing zeros
+    (§4.1).
 
     Args:
         orientation: From ``grid.orient``.
         layout: From ``grid.nudge`` (the planes the model is cut along).
-        result: From ``cutting.cut``.
+        result: From ``cutting.cut``, its pieces labelled by ``labels.layout``.
         placement: From ``connectors.place``.
 
     Returns:
@@ -594,6 +607,13 @@ def dry_run_report(
     lines.append(f"pins: {sum(pins.values())}")
     for (diameter, length), count in sorted(pins.items(), key=lambda item: (-item[0][1], item[0])):
         lines.append(f"pin {_number(diameter)} x {_number(length)} mm: {count}")
+    lines.append(f"labels: {sum(piece.label is not None for piece in result.pieces)}")
+    for piece in result.pieces:
+        if piece.label is not None:
+            lines.append(
+                f"label {piece.id}: {piece.label.text} on face {piece.label.face_id}, "
+                f"height {_number(piece.label.height)} mm"
+            )
     return "\n".join(lines) + "\n"
 
 

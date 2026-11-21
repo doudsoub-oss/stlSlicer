@@ -28,12 +28,12 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) | ✓ |
 | `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` (for `safe_region`) | ✓ |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
-| `labels` | Text outlines and layout on a face | `geometry` | ✓ (`text_outline`, for the calibration codes; the layout comes in Phase 8) |
-| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ (label solids in Phase 8) |
+| `labels` | Text outlines and layout on a face | `geometry`, `connectors` (for `hole_solids`) | ✓ |
+| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ |
 | `calibrate` | Calibration kit | `tools`, `labels` | ✓ |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
 | `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, STL and text writers; the other outputs in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (a split stops after writing the pins, a dry run after the connector placement, until the next stages exist) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (a split stops after writing the pins, a dry run after the label layout, until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -103,9 +103,10 @@ Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
 | `Orientation` | `models` | Phase 3 | The chosen rotation's name and the 4×4 input → cutting transform (in `models`, not `grid`, because `assembly` writes it to `assembly.json` in Phase 9) |
 | `Plane` | `models` | Phase 3 | A cut plane: axis, index among its axis' planes, offset (mm, cutting frame) |
 | `Grid` | `models` | Phase 3 | U, cell counts and planes per axis, and the model's extent in the cutting frame |
-| `Piece` | `models` | Phase 4 | ID, cell, body (cutting frame), face IDs, and the IDs of the small pieces merged into it; `label` comes in Phase 8 |
+| `Piece` | `models` | Phase 4 | ID, cell, body (cutting frame), face IDs, the IDs of the small pieces merged into it, and its `Label` (Phase 8) |
 | `CutFace` | `models` | Phase 4 | ID, plane, neg and pos piece IDs, and the contact region (shapely polygon in plane-local (u, v)) |
 | `Connector` | `models` | Phase 5 | ID `{face}/c{n}`, face, kind (`dowel` or `peg`), axis point (u, v), d, pin length L, hole depth on each side (0 on a peg's side) |
+| `Label` | `models` | Phase 8 | Short ID, cut face, glyph outline in plane-local (u, v), already mirrored for its viewing side, and text height |
 
 `grid.Rotation` (a candidate of auto-orient: name and 3×3 integer matrix) stays in `grid`:
 only `grid` uses it.
@@ -114,7 +115,7 @@ only `grid` uses it.
 only the CLI reads it. `connectors.Placement` (connectors, diagnostics) likewise stays in
 `connectors`, with `Selection`, `Hole` and `Fit`, which only the placement uses.
 `tools.Applied` (pieces, pins), `tools.PinGroup` and `calibrate.Kit` likewise stay in their
-modules. Planned: `Label` (Phase 8), `AssemblyStep` (Phase 9).
+modules, as do `labels.Labelled` and `labels.Fitted`. Planned: `AssemblyStep` (Phase 9).
 
 ## Cutting
 

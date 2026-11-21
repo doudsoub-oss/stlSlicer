@@ -22,6 +22,7 @@ Terms used in the code and the docs. Symbols refer to PLAN.md §6, where every v
 | **Footprint guard** | The condition for merging a small piece: no other piece of its cell lies in its shadow along the axis of its cut faces, so the merged piece can be put in place with one straight move. |
 | **Inverted body** | A closed shell whose faces point the wrong way for where it lies (e.g. a body exported inside out); repair turns it the right way out (W011). |
 | **Island** | A tiny region of a cut face (area below 4·π·(d/2)²), penalised when nudging planes. |
+| **Label region** | Where a piece's label may go on a cut face: the region inset by w, clear of the connectors, with at least `labels.depth` + w of material behind it. |
 | **Margin** (m) | Space kept free on each side of every axis of the build volume. |
 | **Neg / pos piece** | The piece on the local z < offset side / z > offset side of a cut face. |
 | **Nudging** | Moving a cut plane a little from its even-grid position to get better cut faces: fewer faces without room for a connector, then fewer islands. |

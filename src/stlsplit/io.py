@@ -3,9 +3,9 @@
 With ``cli``, the only module that touches the file system (PLAN.md §3.1). ``load_stl`` is the
 first pipeline stage (§5.1): it reads the input STL into the input frame (STL coordinates ×
 ``--scale``) for ``repair.prepare``. ``prepare_output_dir`` applies the output-directory policy
-(§7.6), and ``resolve_label_font`` checks the one configuration rule that needs the file
-system (§7.5). ``write_stl_files`` and ``write_text_file`` write the pins and the calibration
-kit (Phase 7); the rest of the outputs come in Phase 9.
+(§7.6), and ``resolve_label_font`` and ``check_label_font`` check the configuration rules
+that need the file system (§7.5). ``write_stl_files`` and ``write_text_file`` write the pins
+and the calibration kit (Phase 7); the rest of the outputs come in Phase 9.
 
 Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
 raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
@@ -22,7 +22,7 @@ from typing import cast
 
 import trimesh
 
-from stlsplit.config import SCALE_WARNING_MAX, SCALE_WARNING_MIN
+from stlsplit.config import LABEL_CHARACTERS, SCALE_WARNING_MAX, SCALE_WARNING_MIN
 from stlsplit.errors import ConfigError, InputError, diagnostic
 from stlsplit.models import Diagnostic
 
@@ -192,6 +192,40 @@ def resolve_label_font(name: str) -> Path:
     if not path.is_file():
         raise ConfigError("advanced.label_font", f"no such font file: {path}")
     return path
+
+
+def check_label_font(path: Path) -> None:
+    """Check that a font can draw every label and calibration code (PLAN.md §7.5, r11).
+
+    Run only by the modes that draw text, so ``--print-config`` and a run with ``--no-label``
+    don't depend on the font's content.
+
+    Args:
+        path: An existing file (``resolve_label_font``).
+
+    Raises:
+        ConfigError: It can't be read as a font, has no glyph for a character of
+            ``LABEL_CHARACTERS`` (symbol fonts), or draws several of them with one glyph
+            (placeholder fonts such as Last Resort): their text would be unreadable.
+    """
+    from matplotlib.ft2font import FT2Font  # imported here: matplotlib is slow to import
+
+    try:
+        font = FT2Font(str(path))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ConfigError("advanced.label_font", f"can't read {path} as a font") from exc
+    glyphs = {c: font.get_char_index(ord(c)) for c in LABEL_CHARACTERS}
+    missing = "".join(c for c, glyph in glyphs.items() if glyph == 0)
+    if missing:
+        raise ConfigError(
+            "advanced.label_font", f"{path.name} has no glyph for these characters: {missing}"
+        )
+    if len(set(glyphs.values())) < len(glyphs):
+        raise ConfigError(
+            "advanced.label_font",
+            f"{path.name} draws several of these characters with the same glyph: "
+            f"{LABEL_CHARACTERS}",
+        )
 
 
 def write_stl_files(root: Path, files: Mapping[str, trimesh.Trimesh]) -> None:

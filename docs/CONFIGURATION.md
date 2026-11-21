@@ -13,9 +13,9 @@ stlsplit --calibrate -o ./calibration                    # print once, then pick
 stlsplit --print-config --config my_printer.toml         # show the effective settings
 ```
 
-> **Status (Phase 7):** `--calibrate` and `--print-config` are complete. A split runs up to the
-> tool booleans and writes the loose pins (`dowels/`), and a dry run stops after the connector
-> placement; both then end with a warning until labels and the piece export land (PLAN.md §10).
+> **Status (Phase 8):** `--calibrate` and `--print-config` are complete. A split runs up to the
+> tool booleans, labels included, and writes the loose pins (`dowels/`), and a dry run stops after
+> the label layout; both then end with a warning until the piece export lands (PLAN.md §10).
 
 ## Modes
 
@@ -116,7 +116,7 @@ mark; UTF-16 with a byte order mark (what PowerShell 5.1's `>` writes) is accept
 | `--dowel-diameter MM` | `connectors.diameter` | `5.0` | mm | Pin diameter d | ≥ 0.1 |
 | `--dowel-length MM` | `connectors.length` | `20.0` | mm | Exact length of a full pin, L_max. Shallow faces get shorter standard lengths (PLAN.md §6.2) | ≥ L_min = `pin_min_length_factor` × d (15 by default); ≤ the longer side of the bed plate, max(bed X, bed Y) (pins are printed lying down); in peg mode, length / 2 < U on every axis |
 | `--clearance MM` | `connectors.clearance` | `0.2` | mm | Radial clearance added to holes; depends on your printer, measure it with `--calibrate` | ≥ 0 |
-| `--min-wall MM` | `connectors.min_wall` | `2.0` | mm | Minimum material around and between holes | > 0 |
+| `--min-wall MM` | `connectors.min_wall` | `2.0` | mm | Minimum material around and between holes, and around and behind labels | > 0 |
 | `--max-connectors-per-face N` | `connectors.max_per_face` | `4` | — | Maximum connectors per cut face | Integer ≥ 1 |
 | `--label` / `--no-label` | `labels.enabled` | `true` | — | Engrave each piece's ID on one of its cut faces | — |
 | `--label-depth MM` | `labels.depth` | `0.6` | mm | Engraving depth | > 0 and < `min_wall` |
@@ -146,7 +146,7 @@ They tune the formulas of PLAN.md §6 without code changes. d is `connectors.dia
 | `advanced.nudge_window` | `5.0` | mm | How far a cut plane may be moved to a better position: fewer faces without room for a connector, then fewer tiny regions ([details](ALGORITHMS.md#plane-nudging)); never further than every piece still fitting the usable volume allows; 0 disables nudging | ≥ 0 |
 | `advanced.nudge_step` | `0.5` | mm | Step of the nudge search: planes move by whole multiples of it, at most 100 on each side | > 0 and ≥ `nudge_window` / 100 |
 | `advanced.small_piece_volume` | `500.0` | mm³ | Pieces smaller than this are merged into the piece they touch when that is safe (W005; otherwise W004; [details](ALGORITHMS.md#small-piece-merge)); 0 disables merging | ≥ 0 |
-| `advanced.label_font` | `"DejaVuSans-Bold.ttf"` | — | Label font: a font bundled with matplotlib (bare file name) or an absolute path | Must resolve to an existing file |
+| `advanced.label_font` | `"DejaVuSans-Bold.ttf"` | — | Label font: a font bundled with matplotlib (bare file name) or an absolute path | Must resolve to an existing file; when text is drawn, a readable font with digits, `-`, `.` and a to z |
 | `advanced.label_min_height` | `4.0` | mm | Smallest label text height | > 0 and ≤ `label_max_height` |
 | `advanced.label_max_height` | `12.0` | mm | Largest label text height | ≥ `label_min_height` |
 | `advanced.calibration_clearances` | `[0.10, 0.15, 0.20, 0.25, 0.30]` | mm | Clearances of the calibration kit's holes, engraved in hundredths of a millimetre (0.123 reads `12.3`) | 1 to 10 values, each ≥ 0, strictly increasing; `--calibrate` also needs them at least 0.0001 apart, so that their codes differ, and refuses a bar that doesn't fit the printer, an engraving that would reach a hole, or holes that would touch |
