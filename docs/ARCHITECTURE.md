@@ -28,12 +28,12 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) | ✓ |
 | `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` (for `safe_region`) | ✓ |
 | `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
-| `labels` | Text outlines and layout on a face | `geometry` | TODO (Phase 8) |
-| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry` | TODO (Phase 7) |
-| `calibrate` | Calibration kit | `tools`, `labels` | TODO (Phase 7) |
+| `labels` | Text outlines and layout on a face | `geometry` | ✓ (`text_outline`, for the calibration codes; the layout comes in Phase 8) |
+| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ (label solids in Phase 8) |
+| `calibrate` | Calibration kit | `tools`, `labels` | ✓ |
 | `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
-| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup; writing in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (split and dry run stop after the connector placement until the next stages exist) |
+| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, STL and text writers; the other outputs in Phase 9) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (a split stops after writing the pins, a dry run after the connector placement, until the next stages exist) |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -112,8 +112,9 @@ only `grid` uses it.
 
 `cutting.Cut` (pieces, faces, diagnostics: what the cutting stage returns) stays in `cutting`:
 only the CLI reads it. `connectors.Placement` (connectors, diagnostics) likewise stays in
-`connectors`, with `Selection`, `Hole` and `Fit`, which only the placement uses. Planned:
-`Label` (Phase 8), `AssemblyStep` (Phase 9).
+`connectors`, with `Selection`, `Hole` and `Fit`, which only the placement uses.
+`tools.Applied` (pieces, pins), `tools.PinGroup` and `calibrate.Kit` likewise stay in their
+modules. Planned: `Label` (Phase 8), `AssemblyStep` (Phase 9).
 
 ## Cutting
 
@@ -170,6 +171,33 @@ Placement: connectors (face order, then acceptance) + W002 / W009 or W001
 - The CLI logs `connectors: 8 on 2 of 2 cut faces`; the dry run lists every connector and the
   loose pins by diameter and length.
 
+## Tools and calibration
+
+```
+pieces + faces + connectors
+  │  tools.apply, per piece:
+  │    union of its hole cutters (connectors.hole_solids, overlap = TOOL_OVERLAP) → subtract
+  │    union of its pegs (tools.peg_solid, overlap = TOOL_OVERLAP)                → add
+  │    tools.check_piece    valid, same outer shell count, volumes within 5 %, fits printable
+  ▼
+Applied: new pieces (same order) + pin groups (tools.pin_groups, longest first)
+  ▼
+cli: io.prepare_output_dir → io.write_stl_files (dowels/)
+
+--calibrate:  calibrate.build_kit(cfg, font) → io.prepare_output_dir
+              → io.write_stl_files + io.write_text_file (calibration/)
+```
+
+- The tools run before the output directory is prepared, so a failure keeps the previous outputs.
+  A dry run skips them.
+- Tools reach `TOOL_OVERLAP` past a cut face, because a face's vertices can be off its plane by
+  float noise (docs/LIBRARY_NOTES.md, `manifold.face_float_noise`).
+- `calibrate` can't import `io`, so the CLI resolves the font and passes its path.
+- The writers refuse any path outside `io.OWNED_OUTPUTS`, the names `--force` may delete.
+  With `--force`, `io.check_force_keeps` first refuses a run whose input, `--config` file or
+  label font lies inside one of those names.
+- The algorithms: [ALGORITHMS.md](ALGORITHMS.md#tool-solids-pins-and-the-calibration-kit).
+
 ## Frames
 
 | Frame | Definition | Used for |
@@ -224,8 +252,8 @@ PLAN.md §5.3. "Asserted" means checked at run time (a failure is a bug: exit 4)
 
 | ID | Invariant | Asserted | Tested |
 |---|---|---|---|
-| I1 | Every piece body is `NoError` with a positive volume | `repair.prepare` (the body), `cutting.check_pieces` (the pieces) | `tests/integration/test_repair.py`, `tests/integration/test_cutting.py` (hypothesis property) |
-| I2 | Every final piece fits U | `grid.even_grid` (cells, via `grid.fits`); `cutting.merge_small_pieces` refuses a merge that wouldn't fit | `tests/unit/test_grid.py`, `test_cutting.py`; final pieces with pegs: TODO (Phase 7) |
+| I1 | Every piece body is `NoError` with a positive volume | `repair.prepare` (the body), `cutting.check_pieces` (the pieces), `tools.check_piece` (after the tools, with the same number of outer shells) | `tests/integration/test_repair.py`, `tests/integration/test_cutting.py` (hypothesis property), `tests/integration/test_tools.py` |
+| I2 | Cells fit U, and every final piece, pegs included, fits bed − 2·margin (`derived(cfg).printable`) | `grid.even_grid` (cells, via `grid.fits`); `cutting.merge_small_pieces` refuses a merge that wouldn't fit; `tools.check_piece` (final pieces) | `tests/unit/test_grid.py`, `test_cutting.py`, `tests/integration/test_tools.py` |
 | I3 | Before tools, the piece volumes add up to the reference volume within 0.1 % | `cutting.check_pieces` | `test_cutting.py` (hypothesis property, voids, merges) |
 | I4 | Every cut face has one piece on each side, and its region lies inside both sections | by construction (`cutting.cut_faces`) | `test_cutting.py` (`assert_regions_lie_in_both_pieces`) |
 | I5 | No two holes of a piece are closer than `min_wall` | by construction (`connectors.check_candidate` rejects a closer hole, `min_gap`) | `tests/integration/test_connectors.py` (2 × 2 × 2 cube, 15 mm pieces) |

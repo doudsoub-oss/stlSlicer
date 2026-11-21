@@ -507,7 +507,88 @@ the hypothesis property `test_every_cell_fits_u_after_nudging`), `tests/unit/tes
 (the dry run prints the nudged planes).
 
 ## Tool solids, pins and the calibration kit
-TODO (Phase 7)
+
+`tools.apply` turns the placed connectors into real holes and pegs and groups the loose pins.
+`calibrate.build_kit` builds the clearance test kit. Numbers below use the defaults (d = 5,
+c = 0.2, ch_h = 0.4, ch_p = 0.5, f = 0.4, n_seg = 64).
+
+### Tool solids
+
+**Input:** pieces, faces and connectors, cutting frame. **Output:** new pieces in the same
+order, and the pin groups.
+
+For each piece, exactly three booleans:
+
+1. one batched union of its hole cutters (`geometry.union_all`);
+2. one subtraction from the piece;
+3. one batched union of its pegs, added to the result. Pegs come last, so a hole can't eat one.
+
+- **Holes** are `connectors.hole_solids`, the solids the collision check measured (ADR-0014):
+  a bore with its flats at r_h = 2.7, and a 45° mouth chamfer from r_h + ch_h at the plane to
+  r_h at depth ch_h. Both sides are built from the same (u, v), so they line up by
+  construction. Each piece is cut with its own side: the two together are one tool, and cutting
+  with the whole of it removes the same volume, because each side lies inside its own piece.
+- **Pegs** (`tools.peg_solid`) stand on the neg piece: radius d/2, up to L/2 above the plane,
+  with a tip chamfer ch_p. The pos piece gets a hole of depth h(L) = L/2 + a, so the tip keeps
+  the axial play a.
+- **Tools overlap the face by `TOOL_OVERLAP` (0.01 mm).** A cut face isn't exactly on its plane:
+  a torus cut at y = 29.5 has vertices at 29.499999999999993. A peg based exactly on the plane
+  then misses the face by 7e-15 mm and stays a **separate shell** with the right volume and a
+  valid status. So pegs reach 0.01 mm into the face and hole cutters 0.01 mm past it
+  (docs/LIBRARY_NOTES.md, `manifold.face_float_noise`). The volume checks use the tools without
+  the overlap.
+
+**Checks** (`tools.check_piece`, a failure is a bug, exit 4), for every piece:
+
+- `NoError`, a positive volume, and as many outer shells as before (I1). Void shells aren't
+  counted: a hole may swallow a void small enough for the containment check to tolerate;
+- the volume removed equals the holes' volume, and the volume added the pegs', within 5 %;
+- the piece fits `derived(cfg).printable`, bed − 2·margin (I2). In peg mode cells fit the
+  reduced U (100 mm on a 120 mm bed) so that a full cell plus its peg (110 mm) still fits the
+  printable volume (ADR-0005).
+
+### Pins
+
+`tools.pin_solid` revolves a profile of radius d/2 and length L with a chamfer ch_p at both
+ends, cuts the flat by difference (`geometry.split_at`), and lays the pin down with a proper
+rotation: axis along X, flat on z = 0. The flat is 2·√(r² − (r − f)²) = 2.71 mm wide. With
+f = 0 the pin is round and rests on one polygon edge.
+
+The polygon is turned half a segment so an **edge** faces the bed: towards a vertex, a shallow
+flat clips only a sliver (half the nominal area at 16 segments and f = 0.05). The cut then goes
+where the polygon is exactly as wide as the round pin's flat, at most twice the polygon's
+sagitta deeper than f (0.0033 mm with the defaults).
+
+`tools.pin_groups` groups pins by (d, L), longest first: one file
+`dowels/dowel_d{d:.1f}_l{L:.1f}.stl` per group, with its quantity. Pegs are part of their piece.
+File names keep one decimal, so 15.25 and 15.15 mm would share `l15.2`. `tools.check_pin_names`
+refuses that with exit 1, in a dry run too, rather than lose one of the two pins.
+
+### Calibration
+
+`calibrate.build_kit` builds one bar from PLAN.md §6.3 (50 × 12.4 × 13.5 mm by default):
+
+- one hole per clearance, `h(L_max)` deep, radius d/2 + c, in a row centred across the width,
+  at x = w_cal + hole_outer / 2 + i · pitch. A second bar, turned half a turn about its long
+  axis and laid on the first, lines up hole for hole with the same clearances;
+- each hole's **code** engraved `labels.depth` deep on the long side face y = 0, under the
+  hole, read from outside with its top towards the holes' mouths.
+
+**Codes** are the clearance in hundredths of a millimetre, without trailing zeros: `10` for
+0.10, `12.3` for 0.123 (two decimals at most). Two clearances that would read the same are an
+error (exit 1, naming `advanced.calibration_clearances`).
+
+**Code height** is H_min (4 mm), reduced only when it wouldn't fit: a code is at most
+pitch − `CALIBRATION_CODE_GAP` wide (1 mm between neighbours), and at most
+thickness − 2 × that gap tall. At d = 2 the pitch is 6.4 mm and two digits at 4 mm are 6.75 mm
+wide, so the codes shrink.
+
+**Refused with exit 1**, before anything is built: a bar that doesn't fit the printable volume
+(it may be turned a quarter turn on the plate), an engraving as deep as the wall to the widest
+hole, and holes that would touch. §6.3 sizes the walls from the nominal diameter, but a polygon's
+vertices reach r / cos(π / n), so these two checks measure from there.
+
+**Tests:** `tests/integration/test_tools.py`, `tests/integration/test_calibrate.py`.
 
 ## Label layout
 TODO (Phase 8)

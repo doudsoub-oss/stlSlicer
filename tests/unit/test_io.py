@@ -240,3 +240,138 @@ def test_truncated_binary_stl_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(InputError) as exc:
         io.load_stl(path, 1.0)
     assert "truncated.stl" in str(exc.value)
+
+
+# --- writing (Phase 7) ------------------------------------------------------------------------
+
+
+def test_write_stl_files_creates_folders_and_a_binary_stl(tmp_path: Path) -> None:
+    mesh = manifold_to_trimesh(cube())
+    io.write_stl_files(tmp_path, {"dowels/dowel_d5.0_l20.0.stl": mesh})
+    path = tmp_path / "dowels" / "dowel_d5.0_l20.0.stl"
+    data = path.read_bytes()
+    assert data[:80] == b"\x00" * 80  # no timestamp in the header (ADR-0010)
+    assert struct.unpack("<I", data[80:84])[0] == len(mesh.faces)
+    loaded, _ = io.load_stl(path, 1.0)
+    assert loaded.volume == pytest.approx(1000.0)
+
+
+def test_write_text_file_is_utf8_with_unix_line_ends(tmp_path: Path) -> None:
+    io.write_text_file(tmp_path, "calibration/README.md", "first ±\nsecond\n")
+    assert (tmp_path / "calibration" / "README.md").read_bytes() == "first ±\nsecond\n".encode()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("notes.txt", id="not-owned"),
+        pytest.param("other/block.stl", id="not-owned-folder"),
+        pytest.param("../calibration/block.stl", id="parent"),
+        pytest.param("calibration/../../block.stl", id="escapes-through-an-owned-folder"),
+    ],
+)
+def test_writers_only_write_owned_outputs(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError, match="owned"):
+        io.write_text_file(tmp_path, name, "text")
+    with pytest.raises(ValueError, match="owned"):
+        io.write_stl_files(tmp_path, {name: manifold_to_trimesh(cube())})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_failure_is_an_input_error(tmp_path: Path) -> None:
+    (tmp_path / "calibration").write_text("a file where the folder should go")
+    with pytest.raises(InputError, match="can't write") as exc:
+        io.write_text_file(tmp_path, "calibration/README.md", "text")
+    assert exc.value.exit_code == ExitCode.INVALID_INPUT
+
+
+# --- --force never deletes a file the run reads -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("parts/in.stl", id="in-an-owned-folder"),
+        pytest.param("dowels/deep/down/in.stl", id="deep-in-an-owned-folder"),
+        pytest.param("calibration/my.toml", id="in-the-calibration-folder"),
+        pytest.param("assembly.md", id="an-owned-file"),
+    ],
+)
+def test_force_check_refuses_a_file_force_would_delete(tmp_path: Path, name: str) -> None:
+    out = tmp_path / "out"
+    file = out / name
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text("keep")
+    with pytest.raises(InputError, match="--force would delete") as exc:
+        io.check_force_keeps(out, [tmp_path, file])
+    assert str(file) in str(exc.value)
+    assert exc.value.exit_code == ExitCode.INVALID_INPUT
+    assert file.read_text() == "keep"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("model.stl", id="beside-the-outputs"),
+        pytest.param("parts.stl", id="name-starting-like-an-owned-one"),
+        pytest.param("other/parts/in.stl", id="owned-name-in-another-folder"),
+    ],
+)
+def test_force_check_accepts_a_file_force_would_keep(tmp_path: Path, name: str) -> None:
+    out = tmp_path / "out"
+    (out / "parts").mkdir(parents=True)
+    file = out / name
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text("keep")
+    io.check_force_keeps(out, [file])
+    io.prepare_output_dir(out, force=True)
+    assert file.read_text() == "keep"
+
+
+def test_force_check_ignores_missing_paths(tmp_path: Path) -> None:
+    (tmp_path / "out" / "parts").mkdir(parents=True)
+    io.check_force_keeps(tmp_path / "out", [tmp_path / "out" / "parts" / "missing.stl"])
+    io.check_force_keeps(tmp_path / "no-such-dir", [tmp_path / "missing.stl"])
+
+
+def test_force_check_handles_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "parts" / "in.stl").write_text("keep")
+    monkeypatch.chdir(tmp_path / "parts")
+    with pytest.raises(InputError, match="--force would delete"):
+        io.check_force_keeps(Path(".."), [Path("in.stl")])
+
+
+def test_force_check_follows_a_link_to_a_file_force_would_delete(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    (out / "parts").mkdir(parents=True)
+    (out / "parts" / "in.stl").write_text("keep")
+    link = tmp_path / "link.stl"
+    symlink_or_skip(link, out / "parts" / "in.stl", is_dir=False)
+    with pytest.raises(InputError, match="--force would delete"):
+        io.check_force_keeps(out, [link])
+
+
+def test_force_check_sees_through_a_linked_output_directory(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    (real / "parts").mkdir(parents=True)
+    (real / "parts" / "in.stl").write_text("keep")
+    link = tmp_path / "out"
+    symlink_or_skip(link, real, is_dir=True)
+    with pytest.raises(InputError, match="--force would delete"):
+        io.check_force_keeps(link, [real / "parts" / "in.stl"])
+
+
+def test_force_check_accepts_a_file_behind_an_owned_symlink(tmp_path: Path) -> None:
+    # An owned name that is a symlink is unlinked, never followed: the file survives.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "in.stl").write_text("keep")
+    out = tmp_path / "out"
+    out.mkdir()
+    symlink_or_skip(out / "parts", elsewhere, is_dir=True)
+    io.check_force_keeps(out, [out / "parts" / "in.stl"])
+    io.prepare_output_dir(out, force=True)
+    assert (elsewhere / "in.stl").read_text() == "keep"

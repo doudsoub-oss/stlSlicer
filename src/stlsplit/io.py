@@ -4,15 +4,21 @@ With ``cli``, the only module that touches the file system (PLAN.md §3.1). ``lo
 first pipeline stage (§5.1): it reads the input STL into the input frame (STL coordinates ×
 ``--scale``) for ``repair.prepare``. ``prepare_output_dir`` applies the output-directory policy
 (§7.6), and ``resolve_label_font`` checks the one configuration rule that needs the file
-system (§7.5). Writing the outputs comes in Phase 9.
+system (§7.5). ``write_stl_files`` and ``write_text_file`` write the pins and the calibration
+kit (Phase 7); the rest of the outputs come in Phase 9.
 
 Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
 raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
-deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting.
+deletes a name outside ``OWNED_OUTPUTS``, and never follows a symlink while deleting;
+``check_force_keeps`` refuses a run whose own input lies inside one of those names. The
+writers only write under a name in ``OWNED_OUTPUTS``, and their bytes depend only on what they
+are given (no timestamp, ADR-0010).
 """
 
 import shutil
-from pathlib import Path
+from collections.abc import Iterable, Mapping
+from pathlib import Path, PurePosixPath
+from typing import cast
 
 import trimesh
 
@@ -29,7 +35,7 @@ OWNED_OUTPUTS: tuple[str, ...] = (
     "preview_exploded.glb",
 )
 """Every name stlsplit writes in the output directory, and the only names ``--force`` deletes
-(PLAN.md §7.6). The writer (Phase 9) uses this same constant."""
+(PLAN.md §7.6). The writers below use this same constant."""
 
 
 def load_stl(path: Path, scale: float) -> tuple[trimesh.Trimesh, list[Diagnostic]]:
@@ -121,6 +127,41 @@ def prepare_output_dir(path: Path, force: bool) -> None:
         _remove(path / name)
 
 
+def check_force_keeps(path: Path, files: Iterable[Path]) -> None:
+    """Refuse a ``--force`` run that would delete a file it reads (PLAN.md §7.6).
+
+    With the input in ``out/parts/``, ``stlsplit out/parts/in.stl -o out --force`` would delete
+    it. Links are resolved, so a link to a file inside an owned folder counts as that file.
+    An owned name that is itself a link doesn't count: it is unlinked, and what it points to
+    survives. A path that doesn't exist is ignored, and is reported by whatever reads it.
+
+    Args:
+        path: The output directory (``-o``).
+        files: The files the run reads: the input, the ``--config`` file, the label font.
+
+    Raises:
+        InputError: Deleting an entry of ``OWNED_OUTPUTS`` would delete one of ``files``, or
+            the paths can't be compared.
+    """
+    existing = [file for file in files if file.exists()]
+    for name in OWNED_OUTPUTS:
+        entry = path / name
+        if not entry.exists() or entry.is_symlink() or entry.is_junction():
+            continue
+        for file in existing:
+            real = file.resolve()
+            try:
+                # samefile, not a path comparison: it also holds on case-insensitive disks.
+                held = any(entry.samefile(place) for place in (real, *real.parents))
+            except OSError as exc:
+                raise InputError(f"output directory {path}: can't check {file} ({exc})") from exc
+            if held:
+                raise InputError(
+                    f"--force would delete {file}, which this run reads: it is inside {entry}, "
+                    "one of stlsplit's outputs. Move the file or choose another output directory"
+                )
+
+
 def resolve_label_font(name: str) -> Path:
     """Return the font file that ``advanced.label_font`` names (PLAN.md §7.5, ADR-0009).
 
@@ -151,6 +192,56 @@ def resolve_label_font(name: str) -> Path:
     if not path.is_file():
         raise ConfigError("advanced.label_font", f"no such font file: {path}")
     return path
+
+
+def write_stl_files(root: Path, files: Mapping[str, trimesh.Trimesh]) -> None:
+    """Write meshes as binary STL files, in sorted name order.
+
+    trimesh writes an all-zero header, so the bytes hold no timestamp (ADR-0010).
+
+    Args:
+        root: The output directory, already prepared (``prepare_output_dir``).
+        files: Mesh by path relative to ``root``, with ``/`` separators, under a name of
+            ``OWNED_OUTPUTS``.
+
+    Raises:
+        ValueError: A path isn't under an owned name (a bug).
+        InputError: A file can't be written.
+    """
+    targets = {name: _owned_path(root, name) for name in sorted(files)}
+    for name, target in targets.items():
+        _write_bytes(target, cast(bytes, files[name].export(file_type="stl")))
+
+
+def write_text_file(root: Path, name: str, text: str) -> None:
+    """Write a text file as UTF-8, with the same LF line ends on every platform (ADR-0010).
+
+    Args:
+        root: The output directory, already prepared (``prepare_output_dir``).
+        name: Path relative to ``root``, with ``/`` separators, under a name of
+            ``OWNED_OUTPUTS``.
+        text: The content.
+
+    Raises:
+        ValueError: The path isn't under an owned name (a bug).
+        InputError: The file can't be written.
+    """
+    _write_bytes(_owned_path(root, name), text.encode("utf-8"))
+
+
+def _owned_path(root: Path, name: str) -> Path:
+    parts = PurePosixPath(name).parts
+    if not parts or parts[0] not in OWNED_OUTPUTS or ".." in parts:
+        raise ValueError(f"{name} is not under one of stlsplit's owned outputs")
+    return root.joinpath(*parts)
+
+
+def _write_bytes(target: Path, data: bytes) -> None:
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    except OSError as exc:
+        raise InputError(f"can't write {target} ({exc})") from exc
 
 
 def _remove(entry: Path) -> None:

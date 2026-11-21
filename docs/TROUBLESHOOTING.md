@@ -32,6 +32,7 @@ Common cases:
 | `--simplify (model.simplify): a tolerance of 1000 mm removed the whole model` | The `--simplify` tolerance is as large as the model | Use a much smaller tolerance (a few hundredths of a mm is typical), or none |
 | `INPUT model.stl: can't read it as an STL file` | The file is damaged, e.g. a binary STL cut short during a download or copy | Export or download it again |
 | `output directory out is not empty` | stlsplit refuses to mix its outputs with existing files | Use an empty directory, or add `--force`: it replaces only stlsplit's own outputs and keeps everything else |
+| `--force would delete FILE, which this run reads` | The input, the `--config` file or the label font lies inside one of stlsplit's own outputs (`parts/`, `dowels/`, `calibration/`, …), which `--force` deletes | Move the file out of it, or choose another `-o DIR` |
 | `output directory out exists and is not a directory` | `-o` points to a file | Choose another path |
 
 ### 2 — Mesh can't be repaired

@@ -70,6 +70,29 @@ ISLAND_AREA_FACTOR = 4.0
 CALIBRATION_MIN_WALL = 3.0
 """w_cal = max(w, this), mm: the wall used in the calibration kit (§6.3)."""
 
+CALIBRATION_CODE_GAP = 1.0
+"""Calibration codes keep this much room, mm: between two neighbouring codes (a code is at most
+pitch − this wide) and above and below a code on the side face (PLAN.md Appendix E, r10)."""
+
+CALIBRATION_CODE_DECIMALS = 2
+"""Decimals of a calibration code, in hundredths of a millimetre: 0.1234 mm reads ``12.34``,
+and trailing zeros are dropped, so the default clearances read 10 to 30 (r10)."""
+
+TEXT_PATH_SIZE = 100.0
+"""Size at which glyphs are flattened into polylines before being scaled down to the text
+height. matplotlib flattens curves in path units, so at 4 mm a glyph's curves would be coarse."""
+
+TOOL_OVERLAP = 0.01
+"""Hole cutters reach this far past the cut face and pegs this far into it, mm (r10).
+
+A cut face's vertices can be off its plane by float noise (29.499999999999993 for a plane at
+29.5, docs/LIBRARY_NOTES.md): a peg based exactly on the plane then misses the face and stays a
+separate shell, and a cutter ending on it depends on the same exact contact."""
+
+TOOL_VOLUME_TOLERANCE = 0.05
+"""Phase 7, task 5: the volume a piece loses to its holes, or gains from its pegs, equals the
+volume of those tools within this fraction."""
+
 LENGTH_TOLERANCE = 1e-9
 """Slack when comparing lengths that should be equal, mm.
 
@@ -151,6 +174,9 @@ MIN_CIRCULAR_SEGMENTS = 16
 MAX_CIRCULAR_SEGMENTS = 256
 """At 256 segments, a 5.4 mm hole's polygon is within 0.0002 mm of its circle, far below print
 resolution; more segments only multiply the triangles of every hole (PLAN.md Appendix E, r4)."""
+MIN_PIN_DIAMETER = 0.1
+"""mm. A pin far thinner than any nozzle: below about 1e-7 mm the solid collapses to an empty or
+open mesh instead of failing (PLAN.md Appendix E, r10)."""
 MIN_PIN_LENGTH_STEP = 0.1
 """mm. Bounds the number of standard pin lengths, (L_max − L_min) / Δ + 1 (PLAN.md Appendix E,
 r4): a tiny step made ``derived()`` build millions of lengths."""
@@ -464,6 +490,12 @@ def validate(cfg: Config) -> None:
     _check(m.simplify >= 0, "model.simplify", "must be >= 0", m.simplify)
 
     _check(c.diameter > 0, "connectors.diameter", "must be > 0", c.diameter)
+    _check(
+        c.diameter >= MIN_PIN_DIAMETER,
+        "connectors.diameter",
+        f"must be >= {_show(MIN_PIN_DIAMETER)}",
+        c.diameter,
+    )
     _check(c.clearance >= 0, "connectors.clearance", "must be >= 0", c.clearance)
     _check(c.min_wall > 0, "connectors.min_wall", "must be > 0", c.min_wall)
     _check(c.max_per_face >= 1, "connectors.max_per_face", "must be >= 1", c.max_per_face)
@@ -528,6 +560,14 @@ def validate(cfg: Config) -> None:
         adv.pin_chamfer < chamfer_max,
         "advanced.pin_chamfer",
         f"must be < L_min / {PIN_CHAMFER_DIVISOR} ({_show(chamfer_max)})",
+        adv.pin_chamfer,
+    )
+    # A chamfer as wide as the pin's radius leaves no end face to build (PLAN.md Appendix E, r10).
+    radius = c.diameter / 2
+    _check(
+        adv.pin_chamfer < radius,
+        "advanced.pin_chamfer",
+        f"must be < connectors.diameter / 2 ({_show(radius)})",
         adv.pin_chamfer,
     )
     _check(adv.hole_chamfer >= 0, "advanced.hole_chamfer", "must be >= 0", adv.hole_chamfer)
@@ -643,7 +683,9 @@ class Derived:
     """Every value PLAN.md §6 derives from the configuration; build it with ``derived``.
 
     Attributes:
-        usable: U per axis (X, Y, Z), mm: bed − 2·m, minus p in peg mode.
+        usable: U per axis (X, Y, Z), mm: bed − 2·m, minus p in peg mode. Cells fit it.
+        printable: bed − 2·m per axis, mm, in every mode: final pieces fit it, a full cell
+            plus its peg included (I2, ADR-0005).
         pin_min_length: L_min = ``pin_min_length_factor`` · d, mm.
         standard_lengths: The standard pin lengths {L_max − k·Δ ≥ L_min}, longest first, mm.
         hole_depths: h(L) for each standard length, same order, mm.
@@ -666,6 +708,7 @@ class Derived:
     """
 
     usable: tuple[float, float, float]
+    printable: tuple[float, float, float]
     pin_min_length: float
     standard_lengths: tuple[float, ...]
     hole_depths: tuple[float, ...]
@@ -742,6 +785,7 @@ def derived(cfg: Config) -> Derived:
 
     return Derived(
         usable=usable,
+        printable=(ux, uy, uz),
         pin_min_length=l_min,
         standard_lengths=lengths,
         hole_depths=tuple(hole_depth(cfg, length) for length in lengths),

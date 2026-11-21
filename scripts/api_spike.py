@@ -265,6 +265,26 @@ def manifold_coplanar_booleans() -> None:
     expect(close(union.volume(), 2000.0), "coplanar union should have the exact volume")
 
 
+@check("manifold.face_float_noise")
+def manifold_face_float_noise() -> None:
+    # A cut by difference leaves some vertices of the cut face a few ulps off the plane.
+    tube = CrossSection.circle(15.0, 32).translate((60.0, 0.0))
+    torus = Manifold.revolve(tube, 64)
+    low = torus.bounding_box()[:3]
+    torus = torus.translate((-low[0], -low[1], -low[2]))
+    box = Manifold.cube((400.0, 400.0, 400.0))
+    piece = torus - box.translate((-100.0, 29.5, -100.0)) - box.translate((-279.5, -100.0, -100.0))
+    y = np.asarray(piece.to_mesh64().vert_properties)[:, 1]
+    off = np.abs(y[np.abs(y - 29.5) < 1e-6] - 29.5)
+    expect(0.0 < float(off.max()) < 1e-12, f"cut face vertices off the plane by {off.max()}")
+    # A gap that small is a gap: the union keeps two shells. A real overlap fuses them.
+    block = Manifold.cube((10.0, 10.0, 10.0))
+    apart = block + block.translate((0.0, 0.0, 10.0 + 1e-14))
+    expect(len(apart.decompose()) == 2, "a 1e-14 gap should leave two shells")
+    fused = block + block.translate((0.0, 0.0, 10.0 - 0.01))
+    expect(len(fused.decompose()) == 1, "a 0.01 mm overlap should give one shell")
+
+
 @check("manifold.coplanar_cuts")
 def manifold_coplanar_cuts() -> None:
     # A 10 x 10 x 20 column on a 40 x 40 x 10 plinth, cut at the step z = 10. The column alone

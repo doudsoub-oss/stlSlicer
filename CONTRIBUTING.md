@@ -100,7 +100,17 @@ python scripts/api_spike.py                 # after any dependency upgrade
 4. Test the condition that emits it.
 
 ### Add a connector type
-TODO (Phase 7)
+1. Add its name to `config.ConnectorType` and `models.ConnectorKind`. If it sticks out of its
+   piece, reduce U for it in `config.derived` so a full cell plus the feature still fits
+   `printable` (I2, ADR-0005).
+2. `connectors._sides`: which sides of a face need a hole. The 3D checks then cover them.
+3. `tools.apply`: build its solid in plane-local coordinates, reaching `TOOL_OVERLAP` past the
+   face (a tool ending exactly on a cut face can miss it, docs/LIBRARY_NOTES.md), and give
+   `check_piece` the volume it should add or remove.
+4. Tests in `tests/integration/test_tools.py`: volumes, one shell per body, fit, and no overlap
+   between assembled pieces.
+5. Docs: `docs/CONFIGURATION.md` (`--connector`), `docs/ALGORITHMS.md`, PLAN.md §6, an ADR, and a
+   CHANGELOG entry.
 
 ### Add a test fixture
 TODO (Phase 2)

@@ -149,6 +149,12 @@ def test_peg_mode_reduces_the_usable_volume_by_the_protrusion() -> None:
     assert config.derived(make({"connectors.type": "peg"})).usable == (200.0, 200.0, 230.0)
 
 
+@pytest.mark.parametrize("connector", ["dowel", "peg", "none"])
+def test_printable_volume_is_the_bed_minus_its_margins_in_every_mode(connector: str) -> None:
+    d = config.derived(make({"connectors.type": connector}))
+    assert d.printable == (210.0, 210.0, 240.0)
+
+
 def test_example_configuration_gives_standard_lengths_24_to_18() -> None:
     d = config.derived(config.parse_toml(EXAMPLE_TOML, "my_printer.toml"))
     assert d.pin_min_length == 18.0
@@ -293,6 +299,12 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
         pytest.param({"model.simplify": -0.1}, "model.simplify", ">= 0", id="simplify"),
         pytest.param({"connectors.diameter": 0.0}, "connectors.diameter", "> 0", id="diameter"),
         pytest.param(
+            {"connectors.diameter": 1e-9},
+            "connectors.diameter",
+            ">= 0.1",
+            id="diameter-too-small-to-model",
+        ),
+        pytest.param(
             {"connectors.clearance": -0.01}, "connectors.clearance", ">= 0", id="clearance"
         ),
         pytest.param({"connectors.min_wall": 0.0}, "connectors.min_wall", "> 0", id="min-wall"),
@@ -360,6 +372,18 @@ ELEVEN_CLEARANCES = tuple(0.05 * i for i in range(11))
             "advanced.pin_chamfer",
             "< L_min / 4 (3.75)",
             id="pin-chamfer-vs-l-min",
+        ),
+        pytest.param(
+            {"connectors.diameter": 0.8, "connectors.length": 3.0, "advanced.pin_flat": 0.1},
+            "advanced.pin_chamfer",
+            "< connectors.diameter / 2 (0.4)",
+            id="pin-chamfer-vs-radius",
+        ),
+        pytest.param(
+            {"connectors.diameter": 1.0, "connectors.length": 3.0, "advanced.pin_flat": 0.1},
+            "advanced.pin_chamfer",
+            "< connectors.diameter / 2 (0.5)",
+            id="pin-chamfer-equal-to-radius",
         ),
         pytest.param(
             {"advanced.hole_chamfer": -0.1}, "advanced.hole_chamfer", ">= 0", id="hole-chamfer"

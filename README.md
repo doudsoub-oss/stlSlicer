@@ -68,7 +68,29 @@ Exit codes and error messages: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md
 
 ## Calibration: choosing your clearance
 
-TODO (Phase 7): `stlsplit --calibrate`, print the kit, pick the clearance that fits.
+How tightly a pin fits a hole depends on your printer and filament. Print the test kit once, with
+the pin size you will use, to find the right `--clearance`:
+
+```bash
+stlsplit --calibrate -o ./calibration-kit --dowel-diameter 5 --dowel-length 20
+```
+
+| File in `calibration/` | Print | What it is |
+|---|---|---|
+| `block.stl` | 2, lying on the large face, holes vertical | A bar with one hole per clearance |
+| `pin_d5.0_l20.0.stl` | one per hole (5 by default), flat side down | The test pin |
+| `README.md` | — | These instructions, with the table of codes |
+
+1. Push a pin into each hole by hand. The right fit goes in with firm thumb pressure and doesn't
+   wobble.
+2. To test a full joint, turn the second bar half a turn about its long axis and lay it on the
+   first: matching holes face each other.
+3. Read the code engraved under the hole you chose. It is the clearance in hundredths of a
+   millimetre: `20` means 0.20 mm.
+4. Use it: `stlsplit model.stl -o out --clearance 0.2`.
+
+These holes print vertically. Horizontal holes print tighter, so if most holes in your real pieces
+will be horizontal, pick one step looser.
 
 ## The output folder
 
@@ -77,7 +99,16 @@ TODO (Phase 9): `parts/`, `dowels/`, `assembly.json`, `assembly.md`, `preview_ex
 
 ## Printing the dowels
 
-TODO (Phase 7): orientation (on the flat), quantity per file.
+`dowels/` holds one STL per pin length, and the log says how many copies of each to print:
+
+```text
+pins: print 6 x dowels/dowel_d5.0_l20.0.stl
+pins: print 2 x dowels/dowel_d5.0_l18.0.stl
+```
+
+The files are already oriented: keep the **flat side down**, with the pin lying on the bed. Printed
+this way the layers run along the pin, which makes it strong, and the flat lets air and glue escape
+from the blind holes. Pins are symmetric, so either end can go in first.
 
 ## Assembling
 
