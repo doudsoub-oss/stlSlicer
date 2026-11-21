@@ -13,10 +13,6 @@ stlsplit --calibrate -o ./calibration                    # print once, then pick
 stlsplit --print-config --config my_printer.toml         # show the effective settings
 ```
 
-> **Status (Phase 8):** `--calibrate` and `--print-config` are complete. A split runs up to the
-> tool booleans, labels included, and writes the loose pins (`dowels/`), and a dry run stops after
-> the label layout; both then end with a warning until the piece export lands (PLAN.md §10).
-
 ## Modes
 
 | Mode | Command | Writes files | Exit codes |

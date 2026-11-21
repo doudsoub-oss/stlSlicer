@@ -8,14 +8,10 @@ directory (§7.6), runs the stages and turns their diagnostics into the exit cod
 Every failure becomes one line on stderr; ``-v`` adds the traceback. Logs go to stderr; the
 dry run's plan goes to stdout, so ``-q`` doesn't hide it.
 
-Load, repair, orientation, grid, cutting, connector placement, labels and the tools run before
-the output directory is prepared, so an unusable input never creates the directory, and
-``--force`` never deletes the previous outputs for it. The calibration kit is likewise built
-before its directory is prepared.
-
-Phase 8: pieces are labelled and engraved; a split writes the loose pins (``dowels/``), and
-``--calibrate`` is complete. The stages after the tools don't exist yet, so the split and
-dry-run modes end with a warning.
+Every stage, the assembly order and the encoding of every output file run before the output
+directory is prepared, so an unusable input never creates the directory, and ``--force`` never
+deletes the previous outputs for it. The calibration kit is likewise built before its directory
+is prepared.
 """
 
 import argparse
@@ -35,6 +31,7 @@ from manifold3d import Manifold
 
 from stlsplit import (
     __version__,
+    assembly,
     calibrate,
     config,
     connectors,
@@ -447,15 +444,16 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if mode is Mode.CALIBRATE:
         return _write_calibration_kit(ns, cfg)
     exit_code = ExitCode.SUCCESS
+    reported: list[Diagnostic] = []  # every diagnostic, in order, for assembly.json
     # Each stage's diagnostics are logged as soon as it returns, so a load warning (W006) is
     # still shown when repair then fails.
     with stage("load"):
         mesh, loaded = io.load_stl(ns.input, cfg.model.scale)
-    exit_code = max(exit_code, report_diagnostics(loaded))
+    exit_code = max(exit_code, _report(reported, loaded))
     with stage("repair"):
         body, report = repair.prepare(mesh, cfg)
     LOGGER.info("%s", _model_summary(body, report))
-    exit_code = max(exit_code, report_diagnostics(report.diagnostics))
+    exit_code = max(exit_code, _report(reported, report.diagnostics))
     with stage("orientation"):
         body, orientation = grid.orient(body, cfg)
     with stage("grid"):
@@ -466,7 +464,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         math.prod(layout.counts),
         orientation.name,
     )
-    exit_code = max(exit_code, report_diagnostics(grid_diagnostics))
+    exit_code = max(exit_code, _report(reported, grid_diagnostics))
     with stage("nudging"):
         nudged = grid.nudge(body, layout, cfg)
     if any(layout.planes):
@@ -479,7 +477,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         _plural(len(result.pieces), "piece"),
         _plural(len(result.faces), "cut face"),
     )
-    exit_code = max(exit_code, report_diagnostics(result.diagnostics))
+    exit_code = max(exit_code, _report(reported, result.diagnostics))
     with stage("connectors"):
         placement = connectors.place(result.pieces, result.faces, cfg)
     LOGGER.info(
@@ -488,7 +486,7 @@ def _run(ns: argparse.Namespace) -> ExitCode:
         len({connector.face_id for connector in placement.connectors}),
         _plural(len(result.faces), "cut face"),
     )
-    exit_code = max(exit_code, report_diagnostics(placement.diagnostics))
+    exit_code = max(exit_code, _report(reported, placement.diagnostics))
     tools.check_pin_names(placement.connectors)  # here, so a dry run refuses what a split would
     with stage("labels"):
         font = io.resolve_label_font(cfg.advanced.label_font)
@@ -497,36 +495,98 @@ def _run(ns: argparse.Namespace) -> ExitCode:
     if cfg.labels.enabled:
         count = sum(piece.label is not None for piece in result.pieces)
         LOGGER.info("labels: %d of %s", count, _plural(len(result.pieces), "piece"))
-    exit_code = max(exit_code, report_diagnostics(labelled.diagnostics))
+    exit_code = max(exit_code, _report(reported, labelled.diagnostics))
+    with stage("assembly order"):
+        solids = tools.with_pegs(result.pieces, result.faces, placement.connectors, cfg)
+        plan = assembly.plan_steps(solids, result.faces, placement.connectors)
+    exit_code = max(exit_code, _report(reported, plan.diagnostics))
     if mode is Mode.DRY_RUN:
         sys.stdout.write(dry_run_report(orientation, layout, result, placement))
         if "output" in ns:
             LOGGER.debug("-o is ignored with --dry-run: a dry run writes nothing")
-    else:
-        with stage("tools"):
-            applied = tools.apply(result.pieces, result.faces, placement.connectors, cfg)
-        with stage("output directory"):
-            io.prepare_output_dir(ns.output, force="force" in ns)
-        with stage("pins"):
-            _write_pins(ns.output, applied.pins)
-    LOGGER.warning(
-        "the %s mode is not implemented yet (PLAN.md Phase 9 onwards); stopping here",
-        mode.value,
+        return exit_code
+    with stage("tools"):
+        applied = tools.apply(result.pieces, result.faces, placement.connectors, cfg)
+    with stage("export"):
+        files = _encode_outputs(
+            ns, cfg, orientation, layout, result, placement, applied, plan, reported
+        )
+    with stage("output directory"):
+        io.prepare_output_dir(ns.output, force="force" in ns)
+    with stage("write"):
+        io.write_outputs(ns.output, files)
+    for pin in applied.pins:
+        LOGGER.info("pins: print %d x %s", pin.quantity, pin.file_name)
+    dowels = sum(pin.quantity for pin in applied.pins)
+    LOGGER.info(
+        "summary: %s, %s, %s to print, %s",
+        _plural(len(applied.pieces), "piece"),
+        _plural(len(placement.connectors), "connector"),
+        _plural(dowels, "dowel"),
+        _plural(len(reported), "diagnostic"),
     )
+    LOGGER.info("output: %s", ns.output)
+    LOGGER.info("exit code: %d", exit_code)
     return exit_code
+
+
+def _report(reported: list[Diagnostic], diagnostics: Iterable[Diagnostic]) -> ExitCode:
+    """Log a stage's diagnostics, keep them for ``assembly.json`` and return their exit code."""
+    items = list(diagnostics)
+    reported.extend(items)
+    return report_diagnostics(items)
+
+
+def _encode_outputs(
+    ns: argparse.Namespace,
+    cfg: Config,
+    orientation: Orientation,
+    layout: Grid,
+    result: cutting.Cut,
+    placement: connectors.Placement,
+    applied: tools.Applied,
+    plan: assembly.AssemblyPlan,
+    reported: Sequence[Diagnostic],
+) -> dict[str, bytes]:
+    """Build every output file's bytes, by path in the output directory (§5.1, ADR-0010)."""
+    files = {
+        f"parts/{piece.id}.stl": io.encode_stl(geometry.to_trimesh(piece.body))
+        for piece in applied.pieces
+    }
+    files |= {pin.file_name: io.encode_stl(geometry.to_trimesh(pin.solid)) for pin in applied.pins}
+    document = assembly.build_document(
+        version=__version__,
+        input_name=ns.input.name,
+        cfg=cfg,
+        orientation=orientation,
+        layout=layout,
+        pieces=applied.pieces,
+        faces=result.faces,
+        placed=placement.connectors,
+        pins=[
+            assembly.PinCount(pin.file_name, pin.diameter, pin.length, pin.quantity)
+            for pin in applied.pins
+        ],
+        plan=plan,
+        diagnostics=reported,
+    )
+    files["assembly.json"] = assembly.to_json(document).encode("utf-8")
+    files["assembly.md"] = assembly.to_markdown(document).encode("utf-8")
+    if cfg.output.preview:
+        items = assembly.preview_items(applied.pieces, layout, cfg)
+        files["preview_exploded.glb"] = io.encode_preview(
+            [
+                io.PreviewMesh(item.name, geometry.to_trimesh(item.body), item.offset, item.color)
+                for item in items
+            ]
+        )
+    return files
 
 
 def _files_read(ns: argparse.Namespace, cfg: Config) -> list[Path]:
     """The files this run reads: the label font, and the input and ``--config`` file if given."""
     given: list[Path] = [getattr(ns, name) for name in ("input", "config") if name in ns]
     return [io.resolve_label_font(cfg.advanced.label_font), *given]
-
-
-def _write_pins(output: Path, pins: Sequence[tools.PinGroup]) -> None:
-    """Write one STL per pin length and log how many of each to print."""
-    io.write_stl_files(output, {pin.file_name: geometry.to_trimesh(pin.solid) for pin in pins})
-    for pin in pins:
-        LOGGER.info("pins: print %d x %s", pin.quantity, pin.file_name)
 
 
 def _write_calibration_kit(ns: argparse.Namespace, cfg: Config) -> ExitCode:

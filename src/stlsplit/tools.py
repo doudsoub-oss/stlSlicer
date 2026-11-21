@@ -135,6 +135,39 @@ def _apply_to_piece(piece: Piece, tooling: _Tooling, cfg: Config) -> Piece:
     return replace(piece, body=final)
 
 
+def with_pegs(
+    pieces: Sequence[Piece], faces: Sequence[CutFace], placed: Sequence[Connector], cfg: Config
+) -> list[Piece]:
+    """Return the pieces with their pegs, holes and labels not cut, for the clear-path check.
+
+    This is at least as much material as the final piece, so a path clear for it is clear for
+    the final piece, and a dry run, which cuts nothing, gets the same answer as a split
+    (PLAN.md §7.1, r12). manifold3d's booleans are lazy: a union costs only if it is queried.
+
+    Args:
+        pieces: The pieces, cutting frame. They are not modified.
+        faces: Their cut faces.
+        placed: The connectors.
+        cfg: The configuration.
+
+    Returns:
+        New pieces where a peg was added, the same objects elsewhere, in the same order.
+    """
+    by_id = {face.id: face for face in faces}
+    pegs: dict[str, list[Manifold]] = {}
+    for connector in placed:
+        if connector.kind == "peg":
+            face = by_id[connector.face_id]
+            solid = peg_solid(connector, face, cfg, overlap=TOOL_OVERLAP)
+            pegs.setdefault(face.piece_neg, []).append(solid)
+    return [
+        replace(piece, body=piece.body + geometry.union_all(pegs[piece.id]))
+        if piece.id in pegs
+        else piece
+        for piece in pieces
+    ]
+
+
 def label_solid(
     label: Label, face: CutFace, side: int, cfg: Config, *, overlap: float = 0.0
 ) -> Manifold:

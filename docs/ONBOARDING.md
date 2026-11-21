@@ -15,7 +15,7 @@ pip install -e ".[dev]"
 python scripts/check.py
 ```
 
-Then follow the README quick start. TODO (Phase 9).
+Then follow the [README quick start](../README.md#quick-start-5-minutes).
 
 ## 3. Reading order
 

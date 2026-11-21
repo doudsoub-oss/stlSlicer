@@ -1,5 +1,6 @@
 """Docs drift tests (PLAN.md §8.5): fail when the code and the docs disagree."""
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -136,3 +137,13 @@ def test_every_module_is_named_in_architecture_md() -> None:
     text = read(DOCS / "ARCHITECTURE.md")
     modules = sorted(p.stem for p in (ROOT / "src" / "stlsplit").glob("*.py"))
     assert [m for m in modules if f"`{m}`" not in text] == []
+
+
+# --- output format ---------------------------------------------------------------------------
+
+
+def test_every_top_level_schema_property_is_in_output_format_md() -> None:
+    schema = json.loads(read(ROOT / "src" / "stlsplit" / "schemas" / "assembly.schema.json"))
+    text = read(DOCS / "OUTPUT_FORMAT.md")
+    assert schema["properties"]
+    assert [name for name in schema["properties"] if f"`{name}`" not in text] == []

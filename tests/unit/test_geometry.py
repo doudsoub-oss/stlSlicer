@@ -213,3 +213,44 @@ def test_local_point_is_the_inverse_of_the_plane_local_frame(axis: int) -> None:
     point = geometry.local_point(axis, 1.0, 2.0, 3.0)  # type: ignore[arg-type]
     local = geometry.world_to_local(axis)[:, :3] @ np.array(point)  # type: ignore[arg-type]
     assert local.tolist() == [1.0, 2.0, 3.0]
+
+
+# --- clear paths for the assembly order (PLAN.md Phase 9, r12) --------------------------------
+
+
+def _block(x0: float, x1: float, y0: float, y1: float) -> Manifold:
+    return Manifold.cube((x1 - x0, y1 - y0, 10.0)).translate((x0, y0, 0.0))
+
+
+def test_a_solid_beside_the_path_blocks_nothing() -> None:
+    mover, other = _block(0, 10, 0, 10), _block(0, 10, 20, 30)
+    assert not geometry.blocks_exit(mover, other, 0, -1)
+    assert not geometry.blocks_exit(mover, other, 0, 1)
+
+
+def test_a_solid_blocks_only_the_direction_it_lies_in() -> None:
+    mover, other = _block(10, 20, 0, 10), _block(0, 5, 0, 10)
+    assert geometry.blocks_exit(mover, other, 0, -1)
+    assert not geometry.blocks_exit(mover, other, 0, 1)
+
+
+def test_each_overlap_of_the_shadows_is_judged_on_its_own() -> None:
+    # The mover is behind the other solid in both overlaps, though its far part (x 20 to 24)
+    # lies beyond the other's near part (x 6 to 10).
+    mover = _block(0, 4, 0, 10) + _block(20, 24, 20, 30)
+    other = _block(6, 10, 0, 10) + _block(26, 30, 20, 30)
+    assert not geometry.blocks_exit(mover, other, 0, -1)
+    assert geometry.blocks_exit(mover, other, 0, 1)
+
+
+def test_interleaved_solids_block_each_other_both_ways() -> None:
+    mover = _block(0, 4, 0, 10) + _block(6, 10, 20, 30)
+    other = _block(6, 10, 0, 10) + _block(0, 4, 20, 30)
+    for direction in (-1, 1):
+        assert geometry.blocks_exit(mover, other, 0, direction)
+        assert geometry.blocks_exit(other, mover, 0, direction)
+
+
+def test_solids_touching_along_the_path_do_not_block() -> None:
+    mover, other = _block(0, 10, 0, 10), _block(10, 20, 0, 10)
+    assert not geometry.blocks_exit(mover, other, 0, -1)

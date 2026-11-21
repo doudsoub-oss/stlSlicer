@@ -3,7 +3,7 @@
 Dataclasses only, no behaviour. Each dataclass of §5.2 is added by the phase that first uses
 it: Phase 1 adds ``Diagnostic``; Phase 3 adds ``Orientation``, ``Plane`` and ``Grid``; Phase 4
 adds ``Piece`` and ``CutFace``; Phase 5 adds ``Connector``; Phase 8 adds ``Label`` and
-``Piece.label``. ``AssemblyStep`` comes in Phase 9.
+``Piece.label``; Phase 9 adds ``AssemblyStep``.
 """
 
 from dataclasses import dataclass
@@ -190,3 +190,31 @@ class Label:
     face_id: str
     outline: MultiPolygon
     height: float
+
+
+@dataclass(frozen=True)
+class AssemblyStep:
+    """One join of the assembly order (PLAN.md Phase 9, ADR-0004).
+
+    Built by ``assembly.plan_steps``.
+
+    Attributes:
+        number: ``stage.join``, e.g. ``"2.3"``: stage 2 (Y joins), third join. The stage is the
+            axis + 1, even when an earlier stage has no join.
+        axis: The axis of the move; all ``face_ids`` are perpendicular to it (I7).
+        moving: Piece IDs of the sub-assembly that moves, in piece order.
+        static: Piece IDs of the sub-assembly that stays still, in piece order.
+        direction: The move, e.g. ``"-y"``.
+        face_ids: Every face between the two sub-assemblies, in face order.
+        connector_count: Connectors on those faces; 0 is a glue-only join.
+        clear_path: False when no clear straight path could be shown for the move (W013).
+    """
+
+    number: str
+    axis: Axis
+    moving: tuple[str, ...]
+    static: tuple[str, ...]
+    direction: str
+    face_ids: tuple[str, ...]
+    connector_count: int
+    clear_path: bool = True

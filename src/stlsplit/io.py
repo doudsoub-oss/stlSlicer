@@ -4,8 +4,11 @@ With ``cli``, the only module that touches the file system (PLAN.md §3.1). ``lo
 first pipeline stage (§5.1): it reads the input STL into the input frame (STL coordinates ×
 ``--scale``) for ``repair.prepare``. ``prepare_output_dir`` applies the output-directory policy
 (§7.6), and ``resolve_label_font`` and ``check_label_font`` check the configuration rules
-that need the file system (§7.5). ``write_stl_files`` and ``write_text_file`` write the pins
-and the calibration kit (Phase 7); the rest of the outputs come in Phase 9.
+that need the file system (§7.5). ``write_stl_files`` and ``write_text_file`` write the
+calibration kit (Phase 7). A split encodes every output first (``encode_stl``,
+``encode_preview``), so a failure up to there leaves the previous outputs alone, then
+``write_outputs`` writes them (Phase 9). A failure during the write itself, such as a full
+disk, can leave a partial folder.
 
 Guarantees: ``load_stl`` returns a mesh with at least one triangle and finite coordinates, or
 raises ``InputError``. ``prepare_output_dir`` never deletes the output directory itself, never
@@ -16,10 +19,11 @@ are given (no timestamp, ADR-0010).
 """
 
 import shutil
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import NamedTuple, cast
 
+import numpy as np
 import trimesh
 
 from stlsplit.config import LABEL_CHARACTERS, SCALE_WARNING_MAX, SCALE_WARNING_MIN
@@ -36,6 +40,22 @@ OWNED_OUTPUTS: tuple[str, ...] = (
 )
 """Every name stlsplit writes in the output directory, and the only names ``--force`` deletes
 (PLAN.md §7.6). The writers below use this same constant."""
+
+
+class PreviewMesh(NamedTuple):
+    """One piece of the exploded preview.
+
+    Attributes:
+        name: Its glTF node name, the piece ID.
+        mesh: The piece, mm.
+        offset: How far it is moved from its place, mm.
+        color: RGBA, 0 to 255.
+    """
+
+    name: str
+    mesh: trimesh.Trimesh
+    offset: tuple[float, float, float]
+    color: tuple[int, int, int, int]
 
 
 def load_stl(path: Path, scale: float) -> tuple[trimesh.Trimesh, list[Diagnostic]]:
@@ -261,6 +281,60 @@ def write_text_file(root: Path, name: str, text: str) -> None:
         InputError: The file can't be written.
     """
     _write_bytes(_owned_path(root, name), text.encode("utf-8"))
+
+
+def encode_stl(mesh: trimesh.Trimesh) -> bytes:
+    """Return a mesh as a binary STL with an all-zero header (no timestamp, ADR-0010).
+
+    Args:
+        mesh: The mesh, mm.
+
+    Returns:
+        The file's bytes.
+    """
+    return cast(bytes, mesh.export(file_type="stl"))
+
+
+def encode_preview(items: Sequence[PreviewMesh]) -> bytes:
+    """Return the exploded preview as a GLB file (PLAN.md Phase 9, task 5).
+
+    Nodes, geometries and materials are named after the pieces, so the bytes depend only on
+    what is given (ADR-0010).
+
+    Args:
+        items: The pieces, in piece order.
+
+    Returns:
+        The file's bytes.
+    """
+    scene = trimesh.Scene()
+    for item in items:
+        mesh = item.mesh.copy()
+        material = trimesh.visual.material.PBRMaterial(  # type: ignore[no-untyped-call]
+            name=f"{item.name}-color", baseColorFactor=list(item.color)
+        )
+        mesh.visual = trimesh.visual.TextureVisuals(material=material)  # type: ignore[no-untyped-call]
+        transform = np.eye(4)
+        transform[:3, 3] = item.offset
+        scene.add_geometry(mesh, node_name=item.name, geom_name=item.name, transform=transform)
+    return cast(bytes, scene.export(file_type="glb"))  # type: ignore[no-untyped-call]
+
+
+def write_outputs(root: Path, files: Mapping[str, bytes]) -> None:
+    """Write already encoded outputs, in sorted name order (PLAN.md §5.1).
+
+    Args:
+        root: The output directory, already prepared (``prepare_output_dir``).
+        files: Content by path relative to ``root``, with ``/`` separators, under a name of
+            ``OWNED_OUTPUTS``.
+
+    Raises:
+        ValueError: A path isn't under an owned name (a bug); nothing is written.
+        InputError: A file can't be written.
+    """
+    targets = {name: _owned_path(root, name) for name in sorted(files)}
+    for name, target in targets.items():
+        _write_bytes(target, files[name])
 
 
 def _owned_path(root: Path, name: str) -> Path:

@@ -22,7 +22,7 @@ def test_registry_codes_are_well_formed_sorted_and_unique() -> None:
 
 def test_registry_matches_the_plan_severities() -> None:
     # PLAN.md §4.5.
-    partial, warning = {"W001"}, {"W002", "W003", "W004", "W006", "W011"}
+    partial, warning = {"W001", "W013"}, {"W002", "W003", "W004", "W006", "W011"}
     for entry in DIAGNOSTIC_CODES:
         expected = (
             "partial" if entry.code in partial else "warning" if entry.code in warning else "info"

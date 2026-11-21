@@ -92,7 +92,17 @@ def test_force_through_the_cli_keeps_other_files(write_stl: WriteStl, tmp_path: 
     make_owned_and_other_entries(out)
     stl = write_stl(cube(), "model")
     assert cli.main([str(stl), "-o", str(out), "--force"]) == ExitCode.SUCCESS
-    assert sorted(p.name for p in out.iterdir()) == ["notes.txt", "other"]
+    assert sorted(p.name for p in out.iterdir()) == [
+        "assembly.json",
+        "assembly.md",
+        "notes.txt",
+        "other",
+        "parts",
+        "preview_exploded.glb",
+    ]
+    assert [p.name for p in (out / "parts").iterdir()] == ["X0-Y0-Z0.stl"]  # old.stl is gone
+    assert (out / "notes.txt").read_text() == "keep"
+    assert (out / "other" / "parts").read_text() == "keep"
 
 
 @pytest.mark.parametrize("is_dir", [True, False], ids=["folder", "file"])

@@ -30,6 +30,7 @@ from shapely.ops import polylabel
 
 from stlsplit.config import (
     AREA_TOLERANCE,
+    ASSEMBLY_PATH_TOLERANCE,
     CUTTER_PAD,
     POLYLABEL_CACHE_SIZE,
     POLYLABEL_TOLERANCE,
@@ -670,6 +671,51 @@ def overlap_area(first: CrossSection, second: CrossSection) -> float:
         The area of their intersection.
     """
     return float((first ^ second).area())
+
+
+def blocks_exit(mover: Manifold, other: Manifold, axis: Axis, direction: int) -> bool:
+    """Whether a solid may stand in the way of another leaving along an axis (r12).
+
+    Each connected overlap of their shadows is judged on its own: within it, the mover must lie
+    entirely on the ``direction`` side of the other. The check is conservative. Two solids
+    whose layers alternate only in parts of one overlap count as blocking, even if a finer
+    look would find them free, so ``False`` is a proof and ``True`` is a doubt.
+
+    Args:
+        mover: The solid that leaves, mm, cutting frame.
+        other: The solid that stays.
+        axis: The axis of the move.
+        direction: +1 if it leaves towards increasing coordinates, −1 otherwise.
+
+    Returns:
+        True if ``other`` may be in the way.
+    """
+    mover_box, other_box = mover.bounding_box(), other.bounding_box()
+    for across in range(3):
+        if across != axis and (
+            mover_box[across + 3] <= other_box[across] or other_box[across + 3] <= mover_box[across]
+        ):
+            return False
+    overlap = shadow(mover, axis) ^ shadow(other, axis)
+    if overlap.area() <= AREA_TOLERANCE:
+        return False
+    low = min(mover_box[axis], other_box[axis]) - CUTTER_PAD
+    high = max(mover_box[axis + 3], other_box[axis + 3]) + CUTTER_PAD
+    for part in overlap.decompose():
+        if part.area() <= AREA_TOLERANCE:
+            continue
+        column = prism(part, axis, low, high)
+        inside_mover, inside_other = clip(mover, column), clip(other, column)
+        if inside_mover.is_empty() or inside_other.is_empty():
+            continue
+        moved, stays = inside_mover.bounding_box(), inside_other.bounding_box()
+        if direction < 0:
+            clear = moved[axis + 3] <= stays[axis] + ASSEMBLY_PATH_TOLERANCE
+        else:
+            clear = moved[axis] >= stays[axis + 3] - ASSEMBLY_PATH_TOLERANCE
+        if not clear:
+            return True
+    return False
 
 
 def grow(section: CrossSection, delta: float, segments: int = 0) -> CrossSection:

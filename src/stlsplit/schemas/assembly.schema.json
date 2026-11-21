@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stlsplit/assembly.schema.json",
+  "title": "stlsplit assembly map",
+  "description": "The content of assembly.json. Lengths in mm, positions in the cutting frame. See docs/OUTPUT_FORMAT.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "input",
+    "settings",
+    "frame",
+    "grid",
+    "pieces",
+    "faces",
+    "connectors",
+    "pin_groups",
+    "steps",
+    "separate_parts",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "stlsplit" },
+        "version": { "type": "string" }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name"],
+      "properties": {
+        "file_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["printer", "model", "repair", "connectors", "labels", "output", "advanced"],
+      "properties": {
+        "printer": { "type": "object" },
+        "model": { "type": "object" },
+        "repair": { "type": "object" },
+        "connectors": { "type": "object" },
+        "labels": { "type": "object" },
+        "output": { "type": "object" },
+        "advanced": { "type": "object" }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rotation", "input_to_cutting"],
+      "properties": {
+        "rotation": { "type": "string" },
+        "input_to_cutting": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "number" }
+          }
+        }
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usable", "counts", "extent", "planes"],
+      "properties": {
+        "usable": { "$ref": "#/$defs/vector3" },
+        "counts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "extent": { "$ref": "#/$defs/vector3" },
+        "planes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "z"],
+          "properties": {
+            "x": { "$ref": "#/$defs/offsets" },
+            "y": { "$ref": "#/$defs/offsets" },
+            "z": { "$ref": "#/$defs/offsets" }
+          }
+        }
+      }
+    },
+    "pieces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "file",
+          "grid_index",
+          "volume",
+          "bounding_box",
+          "face_ids",
+          "merged_from",
+          "label"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string", "pattern": "^parts/.+\\.stl$" },
+          "grid_index": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": { "type": "integer", "minimum": 0 }
+          },
+          "volume": { "type": "number", "exclusiveMinimum": 0 },
+          "bounding_box": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["min", "max"],
+            "properties": {
+              "min": { "$ref": "#/$defs/vector3" },
+              "max": { "$ref": "#/$defs/vector3" }
+            }
+          },
+          "face_ids": { "$ref": "#/$defs/ids" },
+          "merged_from": { "$ref": "#/$defs/ids" },
+          "label": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "face_id", "height"],
+                "properties": {
+                  "text": { "type": "string" },
+                  "face_id": { "type": "string" },
+                  "height": { "type": "number", "exclusiveMinimum": 0 }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "faces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "axis",
+          "plane_index",
+          "offset",
+          "piece_neg",
+          "piece_pos",
+          "area",
+          "connector_ids"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "axis": { "$ref": "#/$defs/axis" },
+          "plane_index": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "number" },
+          "piece_neg": { "type": "string" },
+          "piece_pos": { "type": "string" },
+          "area": { "type": "number", "minimum": 0 },
+          "connector_ids": { "$ref": "#/$defs/ids" }
+        }
+      }
+    },
+    "connectors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "face_id",
+          "kind",
+          "position",
+          "position_uv",
+          "diameter",
+          "pin_length",
+          "hole_depth_neg",
+          "hole_depth_pos"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "face_id": { "type": "string" },
+          "kind": { "enum": ["dowel", "peg"] },
+          "position": { "$ref": "#/$defs/vector3" },
+          "position_uv": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "number" }
+          },
+          "diameter": { "type": "number", "exclusiveMinimum": 0 },
+          "pin_length": { "type": "number", "exclusiveMinimum": 0 },
+          "hole_depth_neg": { "type": "number", "minimum": 0 },
+          "hole_depth_pos": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "pin_groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "diameter", "length", "quantity"],
+        "properties": {
+          "file": { "type": "string", "pattern": "^dowels/.+\\.stl$" },
+          "diameter": { "type": "number", "exclusiveMinimum": 0 },
+          "length": { "type": "number", "exclusiveMinimum": 0 },
+          "quantity": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "number",
+          "stage",
+          "axis",
+          "moving",
+          "static",
+          "direction",
+          "face_ids",
+          "connector_count",
+          "pegs",
+          "dowels",
+          "glue_only",
+          "clear_path"
+        ],
+        "properties": {
+          "number": { "type": "string", "pattern": "^[123]\\.[1-9][0-9]*$" },
+          "stage": { "enum": [1, 2, 3] },
+          "axis": { "$ref": "#/$defs/axis" },
+          "moving": { "$ref": "#/$defs/nonEmptyIds" },
+          "static": { "$ref": "#/$defs/nonEmptyIds" },
+          "direction": { "enum": ["+x", "-x", "+y", "-y", "+z", "-z"] },
+          "face_ids": { "$ref": "#/$defs/nonEmptyIds" },
+          "connector_count": { "type": "integer", "minimum": 0 },
+          "pegs": { "type": "integer", "minimum": 0 },
+          "dowels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["diameter", "length", "quantity"],
+              "properties": {
+                "diameter": { "type": "number", "exclusiveMinimum": 0 },
+                "length": { "type": "number", "exclusiveMinimum": 0 },
+                "quantity": { "type": "integer", "minimum": 1 }
+              }
+            }
+          },
+          "glue_only": { "type": "boolean" },
+          "clear_path": { "type": "boolean" }
+        }
+      }
+    },
+    "separate_parts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonEmptyIds" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "refs"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^W[0-9]{3}$" },
+          "severity": { "enum": ["info", "warning", "partial"] },
+          "message": { "type": "string" },
+          "refs": { "$ref": "#/$defs/ids" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "axis": { "enum": [0, 1, 2] },
+    "vector3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "offsets": { "type": "array", "items": { "type": "number" } },
+    "ids": { "type": "array", "items": { "type": "string" } },
+    "nonEmptyIds": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+  }
+}

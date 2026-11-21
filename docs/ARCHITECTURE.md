@@ -5,12 +5,11 @@ choices are in the [ADRs](adr/README.md); the numbers are in PLAN.md §6 and `co
 
 ## Pipeline
 
-TODO (Phase 9): final diagram with the functions that exist. The planned pipeline is PLAN.md §5.1:
-
 ```
 input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid → grid.nudge
   → cutting.split_cells → cutting.cut_faces → cutting.merge_small_pieces → connectors.place
-  → labels.layout → tools.apply → assembly.plan_steps → io.write_outputs
+  → labels.layout → tools.apply → assembly.plan_steps → assembly.build_document
+  → io.encode_stl / io.encode_preview → io.prepare_output_dir → io.write_outputs
 ```
 
 ## Module map
@@ -31,9 +30,9 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 | `labels` | Text outlines and layout on a face | `geometry`, `connectors` (for `hole_solids`) | ✓ |
 | `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ |
 | `calibrate` | Calibration kit | `tools`, `labels` | ✓ |
-| `assembly` | Assembly order; JSON and Markdown; preview scene | `models`, `config` | TODO (Phase 9) |
-| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, STL and text writers; the other outputs in Phase 9) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ (a split stops after writing the pins, a dry run after the label layout, until the next stages exist) |
+| `assembly` | Assembly order; JSON and Markdown; preview layout | `models`, `config`, `errors`, `geometry` (r12) | ✓ |
+| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, encoding and writing every output) |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -107,6 +106,7 @@ Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
 | `CutFace` | `models` | Phase 4 | ID, plane, neg and pos piece IDs, and the contact region (shapely polygon in plane-local (u, v)) |
 | `Connector` | `models` | Phase 5 | ID `{face}/c{n}`, face, kind (`dowel` or `peg`), axis point (u, v), d, pin length L, hole depth on each side (0 on a peg's side) |
 | `Label` | `models` | Phase 8 | Short ID, cut face, glyph outline in plane-local (u, v), already mirrored for its viewing side, and text height |
+| `AssemblyStep` | `models` | Phase 9 | Number `stage.join`, axis, moving and static piece IDs, direction, face IDs, connector count, and whether the path was shown clear (r12) |
 
 `grid.Rotation` (a candidate of auto-orient: name and 3×3 integer matrix) stays in `grid`:
 only `grid` uses it.
@@ -115,7 +115,8 @@ only `grid` uses it.
 only the CLI reads it. `connectors.Placement` (connectors, diagnostics) likewise stays in
 `connectors`, with `Selection`, `Hole` and `Fit`, which only the placement uses.
 `tools.Applied` (pieces, pins), `tools.PinGroup` and `calibrate.Kit` likewise stay in their
-modules, as do `labels.Labelled` and `labels.Fitted`. Planned: `AssemblyStep` (Phase 9).
+modules, as do `labels.Labelled` and `labels.Fitted`. `assembly.AssemblyPlan`, `assembly.PinCount`, `assembly.PreviewItem` and `io.PreviewMesh` likewise
+stay in their modules.
 
 ## Cutting
 
@@ -183,7 +184,7 @@ pieces + faces + connectors
   ▼
 Applied: new pieces (same order) + pin groups (tools.pin_groups, longest first)
   ▼
-cli: io.prepare_output_dir → io.write_stl_files (dowels/)
+cli: assembly order, then the outputs (see Outputs)
 
 --calibrate:  calibrate.build_kit(cfg, font) → io.prepare_output_dir
               → io.write_stl_files + io.write_text_file (calibration/)
@@ -198,6 +199,32 @@ cli: io.prepare_output_dir → io.write_stl_files (dowels/)
   With `--force`, `io.check_force_keeps` first refuses a run whose input, `--config` file or
   label font lies inside one of those names.
 - The algorithms: [ALGORITHMS.md](ALGORITHMS.md#tool-solids-pins-and-the-calibration-kit).
+
+## Outputs
+
+```
+Applied pieces + faces + connectors
+  │  assembly.plan_steps       the order (ALGORITHMS.md, "Assembly order"), on tools.with_pegs
+  │  assembly.build_document   one dict: everything assembly.json holds, floats rounded
+  │  assembly.to_json, to_markdown      both rendered from that dict
+  │  assembly.preview_items    offsets and colours (pure)
+  │  io.encode_stl, encode_preview      bytes of every file
+  ▼
+io.prepare_output_dir → io.write_outputs
+```
+
+- Everything is encoded **before** the output directory is prepared, so a failure up to that
+  point keeps the previous outputs. A failure during the write itself (a full disk) can leave a
+  partial folder, and with `--force` the old outputs are already gone by then.
+- A dry run also plans the order, on the same solids (`tools.with_pegs`), so it reports W013 and
+  exits as a split would (PLAN.md §7.1).
+- `assembly` stays pure: the CLI converts solids with `geometry.to_trimesh`, and only `io` builds
+  the glTF scene.
+- `jsonschema` is a development dependency: the tests validate `assembly.json`, a normal run
+  doesn't load the schema.
+- `assembly.json` keeps only the file names of the input and of `label_font`, since either could
+  reveal an absolute path (ADR-0010).
+- Layout and fields: [OUTPUT_FORMAT.md](OUTPUT_FORMAT.md).
 
 ## Frames
 
@@ -259,7 +286,7 @@ PLAN.md §5.3. "Asserted" means checked at run time (a failure is a bug: exit 4)
 | I4 | Every cut face has one piece on each side, and its region lies inside both sections | by construction (`cutting.cut_faces`) | `test_cutting.py` (`assert_regions_lie_in_both_pieces`) |
 | I5 | No two holes of a piece are closer than `min_wall` | by construction (`connectors.check_candidate` rejects a closer hole, `min_gap`) | `tests/integration/test_connectors.py` (2 × 2 × 2 cube, 15 mm pieces) |
 | I6 | Every connector's axis point lies in its face's safe region | `connectors.place` (`AssertionError`) | `tests/integration/test_connectors.py` (`assert_inside_safe_regions`) |
-| I7 | Every assembly step joins two sub-assemblies along faces perpendicular to its axis | TODO (Phase 9); the merge's footprint guard keeps it possible (docs/ALGORITHMS.md) | TODO (Phase 9) |
+| I7 | Every assembly step joins two different sub-assemblies with one straight move, along faces perpendicular to its axis | `assembly.plan_steps` (`AssertionError`); the merge's footprint guard keeps it possible (docs/ALGORITHMS.md) | `tests/unit/test_assembly_order.py` (hypothesis property), `tests/integration/test_export.py` |
 
 ## Diagnostics flow
 
