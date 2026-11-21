@@ -76,7 +76,7 @@ whose code will.
 | `apply_scale` and `repair.fix_winding` have no type annotations, so mypy's strict mode needs a `# type: ignore[no-untyped-call]` on those calls. | 5.2.1 | `io.load_stl`, `geometry._orient_faces` | — (mypy run) |
 | Binary STL export starts with an 80-byte zero header (no timestamp: determinism). | 5.2.1 | `io.encode_stl`; ADR-0010 | `trimesh.stl_zero_header` |
 | `Scene.export(file_type="glb")` works when numpy, scipy and networkx are the only importable third-party packages (checked in a child process where every other installed package looks uninstalled). | 5.2.1 | `io.encode_preview` | `trimesh.glb_export` |
-| `load` of a path that isn't valid UTF-8 (a Latin-1 name on Linux) raises `UnicodeEncodeError`: the file name becomes a scene node, which is hashed as UTF-8. Loading from an open file works. `io.load_stl` reports it as exit 1; fixing it is a Phase 10 item. | 5.2.1 | `io.load_stl` | — (checked by hand, r12) |
+| `load` of a path that isn't valid UTF-8 (a Latin-1 name on Linux) raises `UnicodeEncodeError`: the file name becomes a scene node, which is hashed as UTF-8. Loading from an open file works, so `io.load_stl` opens the file itself (r14). | 5.2.1 | `io.load_stl` | `tests/unit/test_io.py`, `tests/e2e/test_robustness.py` |
 | `CrossSection.offset` with round joins draws corners as polygons with their **vertices** at delta, so their flats fall short (29 % at 0.5 mm with the default segments). Passing `circular_segments = n` and delta / cos(π/n) puts the flats at delta. | 3.5.5 | `geometry.grow`, `labels._unbacked` | `manifold.offset_round_flats` |
 
 ### shapely

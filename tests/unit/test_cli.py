@@ -769,6 +769,93 @@ def test_unexpected_exception_exits_4_and_asks_for_a_report(
     assert "Traceback" in capsys.readouterr().err
 
 
+def test_ctrl_c_exits_130_on_one_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def interrupted(cfg: Config) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(config, "to_toml", interrupted)
+    assert cli.main(["--print-config", "-q"]) == ExitCode.INTERRUPTED == 130
+    err = capsys.readouterr().err
+    assert err == "stlsplit: error: interrupted\n"
+    assert cli.main(["--print-config", "-v"]) == ExitCode.INTERRUPTED
+    assert "Traceback" in capsys.readouterr().err
+
+
+def test_out_of_memory_exits_1_on_one_line_and_suggests_simplify(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def exhausted(cfg: Config) -> str:
+        raise MemoryError
+
+    monkeypatch.setattr(config, "to_toml", exhausted)
+    assert cli.main(["--print-config", "-q"]) == ExitCode.INVALID_INPUT
+    err = capsys.readouterr().err
+    assert len(err.splitlines()) == 1
+    assert err.startswith("stlsplit: error: out of memory")
+    assert "--simplify" in err
+    assert "bug" not in err
+    assert cli.main(["--print-config", "-v"]) == ExitCode.INVALID_INPUT
+    assert "Traceback" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(BrokenPipeError(32, "Broken pipe"), id="posix"),
+        pytest.param(OSError(22, "Invalid argument"), id="windows"),
+    ],
+)
+def test_closed_stdout_exits_1_on_one_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failure: OSError
+) -> None:
+    class ClosedPipe:
+        def write(self, text: str) -> int:
+            raise failure
+
+        def flush(self) -> None:
+            raise failure
+
+        def fileno(self) -> int:
+            raise OSError("no file descriptor")
+
+    monkeypatch.setattr(sys, "stdout", ClosedPipe())
+    assert cli.main(["--print-config", "-q"]) == ExitCode.INVALID_INPUT
+    err = capsys.readouterr().err
+    assert len(err.splitlines()) == 1
+    assert err.startswith("stlsplit: error: can't write to standard output")
+
+
+def test_allocation_failure_inside_a_library_is_out_of_memory(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def exhausted(cfg: Config) -> str:
+        raise RuntimeError("std::bad_alloc")  # how GEOS reports it through shapely
+
+    monkeypatch.setattr(config, "to_toml", exhausted)
+    assert cli.main(["--print-config", "-q"]) == ExitCode.INVALID_INPUT
+    err = capsys.readouterr().err
+    assert err.startswith("stlsplit: error: out of memory")
+    assert "bug" not in err
+
+
+def test_a_failed_stage_still_logs_its_time_and_the_total(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = [str(tmp_path / "missing.stl"), "--dry-run", "-v"]
+    assert cli.main(arguments) == ExitCode.INVALID_INPUT
+    err = capsys.readouterr().err
+    assert "debug: stage load: " in err
+    assert "debug: stage total: " in err
+
+
+def test_output_name_escapes_what_utf8_cannot_encode() -> None:
+    assert cli.output_name("model.stl") == "model.stl"
+    assert cli.output_name("modèle.stl") == "modèle.stl"
+    assert cli.output_name("caf\udce9.stl") == "caf\\udce9.stl"
+
+
 def test_default_logging_shows_info(
     write_stl: WriteStl, capsys: pytest.CaptureFixture[str]
 ) -> None:

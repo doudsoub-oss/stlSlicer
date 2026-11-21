@@ -173,6 +173,9 @@ already fits.
   stick out of their cell (ADR-0005). It comes from `config.derived`, like every number.
 - **One cell on every axis:** W012 (info), "nothing to cut". The pipeline continues with one
   piece, without faces, connectors or labels, and exits 0.
+- **Cell limit** (`grid.check_cell_limit`, r14): the CLI refuses more than `MAX_GRID_CELLS`
+  (1000) cells with exit 1, before any plane is built. A 2 m cube on the default bed is 900.
+  Past that, the scale is almost certainly wrong, and the cells are held in memory.
 
 Nudging (below) then moves planes within ± `nudge_window`, keeping every cell inside U.
 
@@ -199,7 +202,10 @@ difference, no rule is needed to keep planes away from model faces (PLAN.md Appe
 **2. Bodies.** Each cell's material is split into bodies by `geometry.bodies`: each outer
 shell minus the voids it holds. `decompose()` alone returns a void as an inside-out shell of
 its own, and dropping it (its volume is negative) would fill the void (PLAN.md Appendix E,
-r7). Bodies under 1e-6 mm³ (`MIN_BODY_VOLUME`) are split debris and dropped.
+r7). Bodies under 1e-6 mm³ (`MIN_BODY_VOLUME`) are split debris and dropped. For a model under
+1 mm³, the threshold is 1e-6 of its volume (`MIN_BODY_FRACTION`), so a tiny model isn't dropped
+as debris of itself (r14). A kept piece under 5e-7 mm³ would round to a volume of 0, which
+`assembly.json` can't record, so `check_recordable` refuses it with exit 1.
 
 **3. Piece IDs** (PLAN.md §4.3). One body: `X{i}-Y{j}-Z{k}`. Several: `-a`, `-b`, … in the
 order (bbox min z, min y, min x, larger volume first), and `-aa`, `-ab`, … after `-z`. Ties
@@ -376,7 +382,10 @@ dowels; for pegs only the pos side, since the peg stands on the neg piece.
    radius) from the face to depth `h(L) + w` must lie inside the piece, up to 1e-6 of its
    volume. If it doesn't, try the next shorter L; if none passes, reject the candidate. This
    catches pieces that narrow behind the face between the rays: a small void 4.1 mm from the
-   axis, between two rays, fails it.
+   axis, between two rays, fails it. When the longest L fails, one more check can reject the
+   candidate at once (r14): every longer cylinder contains the shortest, so if the shortest
+   leaves more outside than 1e-6 of the *longest* cylinder's volume, no L can pass. A binary
+   search wouldn't be exact here, since the allowance grows with L.
 4. **Collisions**: each new hole (`geometry.hole_solid`: radius r_h, mouth chamfer ch_h,
    depth h(L), the shape the tools will cut in Phase 7) must be at least w from every hole
    already accepted in the same piece (`min_gap`, searching up to w + 1 mm), up to

@@ -295,11 +295,14 @@ are documented in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 - **Failures** are exceptions: `InputError` (exit 1, `ConfigError` for a bad key or value),
   `RepairError` (exit 2, raised by `repair.prepare`). `cli.main` prints each as one line, `stlsplit: error: …`, plus the
-  traceback with `-v`. Any other exception is a bug: exit 4 and a request for a report.
+  traceback with `-v`. Ctrl-C exits 130, running out of memory exits 1, and a closed stdout
+  exits 1 (a closed stderr doesn't change the exit code). Any other exception is a bug: exit 4
+  and a request for a report.
 - **Diagnostics** don't stop the run. A stage builds them with `errors.diagnostic(code,
   message, refs)`, which takes the severity from the registry, and returns them with its
   result (stages stay pure). `cli.report_diagnostics` logs them in order and returns
   `errors.exit_code_for(...)`: 3 if any is `partial`, else 0. The CLI calls it after each
   stage and keeps the highest code.
 - **Logging:** the `stlsplit` logger writes to stderr; `-q` shows warnings and errors, the
-  default adds info, `-v` adds debug messages and the stage timings from `cli.stage(name)`.
+  default adds info, `-v` adds debug messages and the stage timings from `cli.stage(name)`,
+  including the stage that failed and a `total` line.

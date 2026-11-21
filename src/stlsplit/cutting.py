@@ -37,13 +37,15 @@ from stlsplit.config import (
     CUTTER_PAD,
     MERGE_MARGIN,
     MERGE_VOLUME_TOLERANCE,
+    MIN_BODY_FRACTION,
     MIN_BODY_VOLUME,
+    OUTPUT_DECIMALS,
     PIECE_PROBE_DEPTH,
     PIECE_PROBE_DEPTH_RETRY,
     VOLUME_TOLERANCE,
     Config,
 )
-from stlsplit.errors import diagnostic
+from stlsplit.errors import InputError, diagnostic
 from stlsplit.models import Axis, CutFace, Diagnostic, Grid, Piece, Plane
 
 LOGGER = logging.getLogger(__name__)
@@ -84,6 +86,7 @@ def cut(body: Manifold, layout: Grid, cfg: Config, reference_volume: float) -> C
 
     Raises:
         AssertionError: I1 or I3 doesn't hold (a bug).
+        InputError: A piece is too small for its volume to be recorded (``check_recordable``).
     """
     pieces = split_cells(body, layout)
     pieces, faces = cut_faces(body, layout, pieces, cfg.advanced.section_epsilon)
@@ -91,6 +94,7 @@ def cut(body: Manifold, layout: Grid, cfg: Config, reference_volume: float) -> C
         body, layout, pieces, faces, cfg.advanced.small_piece_volume
     )
     check_pieces(pieces, reference_volume)
+    check_recordable(pieces)
     return Cut(pieces=pieces, faces=faces, diagnostics=merged + separate_bodies(pieces, layout))
 
 
@@ -103,8 +107,9 @@ def split_cells(body: Manifold, layout: Grid) -> list[Piece]:
     The body is split by the X planes, then each slab by the Y planes, then each of those by
     the Z planes (``geometry.split_at``; empty results are dropped). Each cell's material is then
     split into bodies (``geometry.bodies``: voids stay with their body), bodies under
-    ``MIN_BODY_VOLUME`` are dropped, and the rest are ordered by (bbox min z, min y, min x,
-    larger volume first); remaining ties keep ``decompose()`` order, which is deterministic.
+    ``MIN_BODY_VOLUME``, or under ``MIN_BODY_FRACTION`` of a smaller model's volume, are
+    dropped, and the rest are ordered by (bbox min z, min y, min x, larger volume first);
+    remaining ties keep ``decompose()`` order, which is deterministic.
 
     Args:
         body: The normalized body, mm, cutting frame.
@@ -115,8 +120,9 @@ def split_cells(body: Manifold, layout: Grid) -> list[Piece]:
         ``-a``, ``-b``, … (``suffix``) when the cell holds several bodies.
     """
     pieces: list[Piece] = []
+    debris = min(MIN_BODY_VOLUME, MIN_BODY_FRACTION * body.volume())
     for index, material in _cells(body, layout):
-        found = [part for part in geometry.bodies(material) if part.volume() >= MIN_BODY_VOLUME]
+        found = [part for part in geometry.bodies(material) if part.volume() >= debris]
         found.sort(key=_body_order)
         for position, part in enumerate(found):
             pieces.append(
@@ -559,6 +565,28 @@ def check_pieces(pieces: Sequence[Piece], reference_volume: float) -> None:
             f"I3: the pieces add up to {total:.10g} mm^3, not the reference volume "
             f"{reference_volume:.10g} mm^3"
         )
+
+
+def check_recordable(pieces: Sequence[Piece]) -> None:
+    """Refuse a piece whose volume would round to 0 in the outputs (§4.1, §7.5, r14).
+
+    ``assembly.json`` keeps ``OUTPUT_DECIMALS`` (6) decimals and its schema requires a volume
+    above 0, so a piece under 5e-7 mm³ can't be recorded. It can't be printed either, and it
+    almost always means a wrong unit.
+
+    Args:
+        pieces: The pieces, before tools are applied.
+
+    Raises:
+        InputError: A piece's volume rounds to 0.
+    """
+    for piece in pieces:
+        volume = piece.body.volume()
+        if round(volume, OUTPUT_DECIMALS) <= 0:
+            raise InputError(
+                f"piece {piece.id} is {volume:.3g} mm^3, too small to record or print: check "
+                "--scale (STL has no units and is read as mm)"
+            )
 
 
 def _point(values: Sequence[float]) -> geometry.Point3:

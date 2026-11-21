@@ -9,7 +9,8 @@ from hypothesis import strategies as st
 from manifold3d import Error, Manifold
 
 from stlsplit import config, grid
-from stlsplit.config import GRID_TOLERANCE, Config
+from stlsplit.config import GRID_TOLERANCE, MAX_GRID_CELLS, Config
+from stlsplit.errors import InputError
 from stlsplit.models import Diagnostic, Grid, Orientation
 from tests.conftest import CHIRAL_L_MARKS, chiral_l, cube, long_box
 
@@ -248,3 +249,26 @@ def test_rotated_extent_follows_the_matrix() -> None:
     # "90 deg about Y": cutting (X, Y, Z) = input (+Z, +Y, −X).
     rotation = next(r for r in grid.ROTATIONS if r.name == "90 deg about Y")
     assert grid.rotated_extent((1.0, 2.0, 3.0), rotation) == (3.0, 2.0, 1.0)
+
+
+# --- the cell limit (Phase 10, PLAN.md §7.5) ------------------------------------------------------
+
+
+def test_cell_limit_accepts_exactly_the_limit() -> None:
+    side = round(MAX_GRID_CELLS ** (1 / 3))
+    assert side**3 == MAX_GRID_CELLS
+    grid.check_cell_limit((side * 10.0, side * 10.0, side * 10.0), (10.0, 10.0, 10.0))
+
+
+def test_cell_limit_refuses_one_cell_more_and_names_the_count() -> None:
+    extent = (float(MAX_GRID_CELLS + 1) * 10.0, 10.0, 10.0)
+    with pytest.raises(
+        InputError, match=rf"{MAX_GRID_CELLS + 1} cells .*limit of {MAX_GRID_CELLS}"
+    ):
+        grid.check_cell_limit(extent, (10.0, 10.0, 10.0))
+
+
+def test_cell_limit_refuses_a_huge_grid_without_building_it() -> None:
+    # 10^36 cells: building them, or even their planes, would never finish.
+    with pytest.raises(InputError, match="--scale"):
+        grid.check_cell_limit((1e13, 1e13, 1e13), (1.0, 1.0, 1.0))

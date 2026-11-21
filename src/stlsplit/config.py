@@ -168,7 +168,11 @@ PLAN.md Appendix E, r6).
 
 MIN_BODY_VOLUME = 1e-6
 """Bodies of a cell smaller than this, mm³, are float debris of the split and dropped (Phase 4,
-task 4)."""
+task 4), unless the model itself is that small: see ``MIN_BODY_FRACTION``."""
+MIN_BODY_FRACTION = 1e-6
+"""The debris threshold is at most this fraction of the model's volume (Phase 10), so a tiny
+model (a 10 mm cube at ``--scale 0.001`` is 1e-6 mm³) isn't dropped as debris of itself. Models
+of 1 mm³ or more keep the threshold ``MIN_BODY_VOLUME``."""
 
 AREA_TOLERANCE = 1e-6
 """Areas at or below this, mm², are float noise (Phase 4): a clipped region that small is
@@ -231,6 +235,14 @@ MAX_NUDGE_STEPS = 100
 (PLAN.md Appendix E, r9). Each step is a position to score, two slices of the whole body
 (about 35 ms at 1M triangles), and a tiny ``nudge_step`` made nudging build millions of
 positions, or overflow (exit 4)."""
+MAX_COORDINATE = 5e9
+"""Largest coordinate accepted after ``--scale``, mm (§7.5, PLAN.md Appendix E, r14). A model from
+−5e9 to 5e9 is 1e10 mm wide, the largest size checked to work: at 2e10 mm manifold3d's 2D
+sections raise "Values exceed permitted range". At about 1e100, trimesh's mass properties
+overflow too, which used to end in a misleading repair error."""
+MAX_GRID_CELLS = 1000
+"""Cells a grid may have at most (§7.5, PLAN.md Appendix E, r14). A 2 m cube on the default bed is
+900. Beyond this the scale is almost certainly wrong, and the cells are built in memory."""
 MAX_SECTION_EPSILON = 0.1
 MAX_CALIBRATION_CLEARANCES = 10
 PIN_FLAT_DIVISOR = 4

@@ -1,5 +1,6 @@
 import os
 import re
+import signal
 import struct
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,7 @@ import trimesh
 from manifold3d import Manifold
 
 from stlsplit import cli, io
+from stlsplit.config import MAX_COORDINATE
 from stlsplit.errors import ConfigError, ExitCode, InputError
 from tests.conftest import cube, manifold_to_trimesh
 
@@ -218,6 +220,44 @@ def test_triangle_with_a_non_finite_coordinate_is_dropped_on_load(tmp_path: Path
     assert np.isfinite(loaded.vertices).all()
 
 
+@pytest.mark.parametrize("scale", [1e14, 1e100, 1e308], ids=["over-limit", "1e100", "overflow"])
+def test_scale_beyond_the_coordinate_limit_is_a_config_error(
+    write_stl: WriteStl, scale: float
+) -> None:
+    with pytest.raises(ConfigError, match="use a smaller scale") as exc:
+        io.load_stl(write_stl(cube(100.0), "model"), scale)
+    assert exc.value.key == "model.scale"
+
+
+def test_scale_up_to_the_coordinate_limit_is_accepted(write_stl: WriteStl) -> None:
+    mesh, diagnostics = io.load_stl(write_stl(cube(100.0), "model"), MAX_COORDINATE / 100.0)
+    assert float(mesh.extents.max()) == pytest.approx(MAX_COORDINATE)
+    assert [d.code for d in diagnostics] == ["W006"]
+
+
+def test_out_of_memory_while_loading_is_not_a_damaged_file(
+    write_stl: WriteStl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def exhausted(*args: object, **kwargs: object) -> None:
+        raise MemoryError
+
+    stl = write_stl(cube(), "model")
+    monkeypatch.setattr(io.trimesh, "load", exhausted)
+    with pytest.raises(MemoryError):
+        io.load_stl(stl, 1.0)
+
+
+def test_load_stl_reads_a_name_that_is_not_utf8(write_stl: WriteStl, tmp_path: Path) -> None:
+    source = write_stl(cube(), "model")
+    try:
+        path = Path(os.fsdecode(os.fsencode(tmp_path) + b"/caf\xe9.stl"))
+        path.write_bytes(source.read_bytes())
+    except (OSError, UnicodeError):
+        pytest.skip("this file system refuses names that aren't valid UTF-8")
+    mesh, _ = io.load_stl(path, 1.0)
+    assert len(mesh.faces) == 12
+
+
 def test_missing_input_file_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(InputError, match="no such file"):
         io.load_stl(tmp_path / "missing.stl", 1.0)
@@ -401,6 +441,94 @@ def test_a_swap_that_cannot_be_undone_keeps_the_old_outputs_and_says_where(
         real(source, target)
 
     monkeypatch.setattr(io.os, "replace", fails_from_the_third)
+    with pytest.raises(InputError, match=re.escape(io.STAGING_DIR)):
+        io.publish_outputs(out, NEW_FILES, force=True)
+    old = out / io.STAGING_DIR / "old"
+    assert (old / "parts" / "old.stl").read_text() == "old"
+    assert (old / "assembly.json").read_text() == "old json"
+
+
+@pytest.mark.parametrize("rename", [0, 1, 2, 3])
+def test_ctrl_c_during_the_swap_lets_it_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rename: int
+) -> None:
+    out = tmp_path / "out"
+    earlier_run(out)
+    handler = signal.getsignal(signal.SIGINT)
+    real = os.replace
+    calls = []
+
+    def pressed_after_the_rename(source: Path, target: Path) -> None:
+        real(source, target)
+        calls.append(source)
+        if len(calls) - 1 == rename:
+            signal.raise_signal(signal.SIGINT)
+
+    monkeypatch.setattr(io.os, "replace", pressed_after_the_rename)
+    io.publish_outputs(out, NEW_FILES, force=True)
+    assert len(calls) > rename
+    assert [p.name for p in (out / "parts").iterdir()] == ["new.stl"]
+    assert (out / "assembly.json").read_bytes() == b"new json"
+    assert not (out / io.STAGING_DIR).exists()
+    assert signal.getsignal(signal.SIGINT) is handler
+
+
+def test_ctrl_c_while_deleting_the_old_outputs_keeps_the_new_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    earlier_run(out)
+    real = io._remove
+
+    def pressed(entry: Path) -> None:
+        if entry.parent.name == "old":
+            signal.raise_signal(signal.SIGINT)
+        real(entry)
+
+    monkeypatch.setattr(io, "_remove", pressed)
+    io.publish_outputs(out, NEW_FILES, force=True)
+    assert (out / "assembly.json").read_bytes() == b"new json"
+    assert not (out / io.STAGING_DIR).exists()
+
+
+@pytest.mark.parametrize("rename", [0, 1, 2, 3])
+def test_an_exception_right_after_a_rename_is_undone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rename: int
+) -> None:
+    out = tmp_path / "out"
+    earlier_run(out)
+    real = os.replace
+    calls = []
+
+    def stopped_after_the_rename(source: Path, target: Path) -> None:
+        real(source, target)
+        calls.append(source)
+        if len(calls) - 1 == rename:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(io.os, "replace", stopped_after_the_rename)
+    with pytest.raises(KeyboardInterrupt):
+        io.publish_outputs(out, NEW_FILES, force=True)
+    assert_earlier_run_is_intact(out)
+
+
+def test_an_exception_during_the_undo_keeps_the_old_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    earlier_run(out)
+    real = os.replace
+    calls = []
+
+    def stopped_twice(source: Path, target: Path) -> None:
+        calls.append(source)
+        if len(calls) == 3:  # the first rename of the undo
+            raise KeyboardInterrupt
+        real(source, target)
+        if len(calls) == 2:  # both old outputs have just moved out
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(io.os, "replace", stopped_twice)
     with pytest.raises(InputError, match=re.escape(io.STAGING_DIR)):
         io.publish_outputs(out, NEW_FILES, force=True)
     old = out / io.STAGING_DIR / "old"

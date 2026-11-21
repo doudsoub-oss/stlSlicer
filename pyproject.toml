@@ -44,7 +44,7 @@ dev = [
 deep-repair = ["pymeshlab>=2025.7.post1"]
 
 [project.scripts]
-stlsplit = "stlsplit.cli:main"
+stlsplit = "stlsplit.__main__:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -85,7 +85,15 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--cov=stlsplit", "--cov-report=term-missing:skip-covered"]
+# "not slow": a bare pytest skips the performance tests; a later -m (pytest -m slow) replaces it.
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "-m",
+    "not slow",
+    "--cov=stlsplit",
+    "--cov-report=term-missing:skip-covered",
+]
 markers = [
     "e2e: end-to-end tests running the CLI in a subprocess",
     "slow: performance tests on large models (manual and weekly CI)",

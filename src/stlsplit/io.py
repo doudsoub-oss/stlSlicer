@@ -19,14 +19,20 @@ import contextlib
 import logging
 import os
 import shutil
-from collections.abc import Iterable, Mapping, Sequence
+import signal
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple, cast
 
 import numpy as np
 import trimesh
 
-from stlsplit.config import LABEL_CHARACTERS, SCALE_WARNING_MAX, SCALE_WARNING_MIN
+from stlsplit.config import (
+    LABEL_CHARACTERS,
+    MAX_COORDINATE,
+    SCALE_WARNING_MAX,
+    SCALE_WARNING_MIN,
+)
 from stlsplit.errors import ConfigError, InputError, diagnostic
 from stlsplit.models import Diagnostic
 
@@ -83,20 +89,34 @@ def load_stl(path: Path, scale: float) -> tuple[trimesh.Trimesh, list[Diagnostic
     Raises:
         InputError: The file doesn't exist, isn't a file, can't be parsed as STL, or holds no
             triangle.
+        ConfigError: ``scale`` puts a coordinate beyond ``MAX_COORDINATE``.
     """
     if not path.exists():
         raise InputError(f"INPUT {path}: no such file")
     if not path.is_file():
         raise InputError(f"INPUT {path} is not a file")
     try:
-        mesh = trimesh.load(path, file_type="stl", force="mesh")
+        # From an open file: given a path, trimesh hashes the name as UTF-8, which fails on a
+        # name that isn't valid UTF-8 (docs/LIBRARY_NOTES.md).
+        with path.open("rb") as stream:
+            mesh = trimesh.load(stream, file_type="stl", force="mesh")
+    except MemoryError:
+        raise  # the CLI reports it as such: the file isn't damaged
     except Exception as exc:  # trimesh's parsers raise many types on malformed input
         raise InputError(
             f"INPUT {path}: can't read it as an STL file ({type(exc).__name__}: {exc})"
         ) from exc
     if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
         raise InputError(f"INPUT {path}: no triangles found; is it an STL file?")
-    mesh.apply_scale(scale)  # type: ignore[no-untyped-call]  # unannotated in trimesh
+    with np.errstate(over="ignore", invalid="ignore"):  # an overflow is reported just below
+        mesh.apply_scale(scale)  # type: ignore[no-untyped-call]  # unannotated in trimesh
+        reach = float(np.abs(mesh.vertices).max())
+    if not reach <= MAX_COORDINATE:  # also catches a coordinate that overflowed
+        raise ConfigError(
+            "model.scale",
+            f"{scale:g} puts the model's coordinates at {reach:g} mm, over the limit of "
+            f"{MAX_COORDINATE:g} mm; use a smaller scale",
+        )
     size = float(mesh.extents.max())
     diagnostics = []
     if size < SCALE_WARNING_MIN or size > SCALE_WARNING_MAX:
@@ -156,16 +176,48 @@ def publish_outputs(path: Path, files: Mapping[str, bytes], force: bool) -> None
             raise InputError(f"can't write {staging} ({exc})") from exc
         for name in names:
             _write_bytes(_owned_path(new, name), files[name])
-        _swap(path, new, old)
+        with _holding_ctrl_c():
+            _swap(path, new, old)
+            _delete_replaced(staging, old)
     except _StrandedOutputsError:
         raise  # the staging folder holds the only copy of the old outputs: keep it
-    except BaseException:  # Ctrl-C too: leave the folder as it was
+    except BaseException as exc:  # Ctrl-C too: leave the folder as it was
+        if _may_hold_outputs(old):
+            raise _StrandedOutputsError(
+                f"the run stopped while replacing the outputs in {path} "
+                f"({type(exc).__name__}): the previous ones are in {old}"
+            ) from exc
         shutil.rmtree(staging, ignore_errors=True)
         if created:
             with contextlib.suppress(OSError):
                 path.rmdir()
         raise
-    _delete_replaced(staging, old)
+
+
+@contextlib.contextmanager
+def _holding_ctrl_c() -> Iterator[None]:
+    """Ignore Ctrl-C while the outputs are swapped and the old ones deleted (§7.6, r14).
+
+    These are a few renames and deletions. Stopped halfway, they could lose the only copy of
+    an old output; once the swap is done, the run has succeeded and keeps its exit code.
+    """
+    try:
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:  # not the main thread, where Python never raises KeyboardInterrupt
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, signal.SIG_DFL if previous is None else previous)
+
+
+def _may_hold_outputs(old: Path) -> bool:
+    """Whether the staging folder's ``old`` may hold outputs; if it can't be read, it may."""
+    try:
+        return old.is_dir() and any(old.iterdir())
+    except OSError:
+        return True
 
 
 def _check_output_dir(path: Path, force: bool) -> bool:
@@ -207,11 +259,11 @@ def _swap(path: Path, new: Path, old: Path) -> None:
     try:
         for name in OWNED_OUTPUTS:
             if os.path.lexists(path / name):  # a dangling symlink counts
+                moved_out.append(name)  # before the rename, so the undo can't miss it
                 os.replace(path / name, old / name)
-                moved_out.append(name)
         for entry in sorted(new.iterdir()):
-            os.replace(entry, path / entry.name)
             moved_in.append(entry.name)
+            os.replace(entry, path / entry.name)
     except BaseException as exc:
         if not _undo_swap(path, new, old, moved_out, moved_in):
             raise _StrandedOutputsError(
@@ -228,12 +280,17 @@ def _swap(path: Path, new: Path, old: Path) -> None:
 def _undo_swap(
     path: Path, new: Path, old: Path, moved_out: Sequence[str], moved_in: Sequence[str]
 ) -> bool:
-    """Put everything back, trying every entry; return whether all of it worked."""
+    """Put everything back, trying every entry; return whether all of it worked.
+
+    An entry is listed before its rename, so one whose source is missing was never moved.
+    """
     restored = True
     for source, target in [
         *((path / name, new / name) for name in reversed(moved_in)),
         *((old / name, path / name) for name in reversed(moved_out)),
     ]:
+        if not os.path.lexists(source):
+            continue
         try:
             os.replace(source, target)
         except OSError:

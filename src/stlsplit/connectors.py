@@ -47,6 +47,7 @@ from stlsplit.config import (
     MAX_CANDIDATE_TRIALS,
     RAY_CIRCLE_COUNT,
     RAY_START_OFFSET,
+    VOID_RESIDUAL_FRACTION,
     Config,
 )
 from stlsplit.errors import diagnostic
@@ -362,16 +363,7 @@ def check_candidate(
     available = [available_depth(bodies[piece], face.plane, uv, side, cfg) for piece, side in sides]
     limits = [depth for depth in available if depth is not None]
     lengths = lengths_that_fit(min(limits) if limits else None, cfg)
-    length = next(
-        (
-            pin
-            for pin in lengths
-            if all(
-                fits_inside(bodies[piece], face.plane, uv, side, pin, cfg) for piece, side in sides
-            )
-        ),
-        None,
-    )
+    length = _longest_fit(bodies, face.plane, uv, sides, lengths, cfg)
     if length is None:
         return None
     depth = config.hole_depth(cfg, length)
@@ -456,19 +448,71 @@ def fits_inside(
     Returns:
         True if the probe lies inside the piece.
     """
-    d = _derived(cfg)
-    depth = config.hole_depth(cfg, length) + cfg.connectors.min_wall
-    probe = geometry.hole_solid(
+    return geometry.lies_inside(_probe(plane, uv, side, length, cfg), body)
+
+
+def _probe(
+    plane: Plane, uv: tuple[float, float], side: int, length: float, cfg: Config
+) -> Manifold:
+    """The containment cylinder of ``fits_inside``: radius r_h + w, depth h(L) + w."""
+    return geometry.hole_solid(
         plane.axis,
         plane.offset,
         uv,
         side,
-        depth,
-        d.probe_radius,
+        config.hole_depth(cfg, length) + cfg.connectors.min_wall,
+        _derived(cfg).probe_radius,
         0.0,
         cfg.advanced.circular_segments,
     )
-    return geometry.lies_inside(probe, body)
+
+
+def _longest_fit(
+    bodies: Mapping[str, Manifold],
+    plane: Plane,
+    uv: tuple[float, float],
+    sides: Sequence[Side],
+    lengths: Sequence[float],
+    cfg: Config,
+) -> float | None:
+    """The longest of ``lengths`` (longest first) that fits on every side, or ``None``.
+
+    When the longest fails, ``_no_length_fits`` can reject the candidate at once. Without it,
+    a 60 mm pin with a 0.1 mm step tried 451 lengths per rejected candidate (Phase 10).
+    """
+    for position, pin in enumerate(lengths):
+        if all(fits_inside(bodies[piece], plane, uv, side, pin, cfg) for piece, side in sides):
+            return pin
+        if (
+            position == 0
+            and len(lengths) > 1
+            and any(
+                _no_length_fits(bodies[piece], plane, uv, side, lengths, cfg)
+                for piece, side in sides
+            )
+        ):
+            return None
+    return None
+
+
+def _no_length_fits(
+    body: Manifold,
+    plane: Plane,
+    uv: tuple[float, float],
+    side: int,
+    lengths: Sequence[float],
+    cfg: Config,
+) -> bool:
+    """Whether the shortest probe already leaves too much outside for any length to fit.
+
+    Every longer probe contains the shortest, so it leaves at least that volume outside the
+    piece, and its allowance is at most ``VOID_RESIDUAL_FRACTION`` of the longest probe. This
+    gives the same answer as trying each length, including at the tolerance edge, where a
+    binary search wouldn't: the allowance grows with L, so containment isn't monotonic there.
+    """
+    outside = (_probe(plane, uv, side, lengths[-1], cfg) - body).volume()
+    allowance = VOID_RESIDUAL_FRACTION * _probe(plane, uv, side, lengths[0], cfg).volume()
+    return bool(outside > allowance)
 
 
 def hole_solids(

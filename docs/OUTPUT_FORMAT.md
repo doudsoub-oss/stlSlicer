@@ -77,7 +77,7 @@ timestamp or absolute path.
 |---|---|---|
 | `schema_version` | integer | `1` |
 | `tool` | object | `name` (`stlsplit`), `version` |
-| `input` | object | `file_name`: the input's name, without any folder |
+| `input` | object | `file_name`: the input's name, without any folder. Bytes of a name that isn't valid UTF-8 are written as text, for example `caf\udce9.stl` |
 | `settings` | object | The effective configuration, by TOML table: `printer`, `model`, `repair`, `connectors`, `labels`, `output`, `advanced`. `advanced.label_font` is a file name only |
 | `frame` | object | `rotation` (its name) and `input_to_cutting`: the 4×4 matrix, row by row, with `x_cut = R · x_in + t` |
 | `grid` | object | `usable` (U per axis), `counts` (cells per axis), `extent` (model size), `planes`: offsets per axis under `x`, `y`, `z` |

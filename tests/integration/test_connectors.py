@@ -17,7 +17,7 @@ from manifold3d import Manifold
 from stlsplit import config, connectors, cutting, geometry, grid
 from stlsplit.config import RAY_START_OFFSET, Config
 from stlsplit.models import Connector, CutFace, Grid
-from tests.conftest import cube, hollow_sphere, wedge, wide_u_shape
+from tests.conftest import SLIT_BLOCK_CUT, cube, hollow_sphere, slit_block, wedge, wide_u_shape
 from tests.integration.test_cutting import even, hand_grid, make, oriented
 
 WALL = Config().connectors.min_wall
@@ -274,3 +274,69 @@ def test_connector_type_none_places_nothing_and_reports_nothing() -> None:
     layout = even(body, (40.0, 40.0, 40.0))
     _, placement = place(body, layout, {"connectors.type": "none"})
     assert placement == connectors.Placement(connectors=[], diagnostics=())
+
+
+# --- the pin-length search (Phase 10) ----------------------------------------------------------
+
+MANY_LENGTHS = {"connectors.length": 60.0, "advanced.pin_length_step": 0.1}
+"""451 standard lengths, from 60 down to 15 mm."""
+
+
+def slit_face() -> tuple[CutFace, dict[str, Manifold], Config]:
+    body = slit_block()
+    layout = hand_grid(body, (210.0, 210.0, 240.0), ((SLIT_BLOCK_CUT,), (), ()))
+    cfg = make(MANY_LENGTHS)
+    result = split(body, layout, cfg)
+    return result.faces[0], {piece.id: piece.body for piece in result.pieces}, cfg
+
+
+def test_a_candidate_no_length_fits_is_rejected_without_trying_every_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    face, bodies, cfg = slit_face()
+    assert len(config.derived(cfg).standard_lengths) == 451
+    calls = 0
+    real = connectors.fits_inside
+
+    def counting(*args: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        return real(*args)
+
+    monkeypatch.setattr(connectors, "fits_inside", counting)
+    assert connectors.check_candidate(face, (50.0, 50.0), bodies, {}, cfg) is None
+    assert calls <= 2  # the longest length, on each side at most
+
+
+@pytest.mark.parametrize("many_lengths", [False, True], ids=["default-lengths", "451-lengths"])
+def test_the_early_rejection_gives_the_same_length_as_trying_all(many_lengths: bool) -> None:
+    body = oriented(wedge())
+    layout = hand_grid(body, (60.0, 60.0, 60.0), ((40.0,), (), ()))
+    cfg = make(MANY_LENGTHS if many_lengths else None)
+    result = split(body, layout, cfg)
+    face = result.faces[0]
+    bodies = {piece.id: piece.body for piece in result.pieces}
+    sides = ((face.piece_neg, -1), (face.piece_pos, 1))
+    for u, v in itertools.product((10.0, 20.0, 28.0, 30.5, 31.25, 33.0, 34.5), (8.0, 20.0)):
+        limits = [
+            depth
+            for depth in (
+                connectors.available_depth(bodies[piece], face.plane, (u, v), side, cfg)
+                for piece, side in sides
+            )
+            if depth is not None
+        ]
+        lengths = connectors.lengths_that_fit(min(limits) if limits else None, cfg)
+        expected = next(
+            (
+                pin
+                for pin in lengths
+                if all(
+                    connectors.fits_inside(bodies[piece], face.plane, (u, v), side, pin, cfg)
+                    for piece, side in sides
+                )
+            ),
+            None,
+        )
+        found = connectors.check_candidate(face, (u, v), bodies, {}, cfg)
+        assert (found.length if found else None) == expected, (u, v)
