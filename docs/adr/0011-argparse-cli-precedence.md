@@ -22,4 +22,5 @@ Simple, but unfriendly for one-off runs.
 ## Consequences
 - Easier: precedence is testable and documented.
 - Harder: option values must be read from the merged config, never from argparse defaults.
+- As built (Phase 10, PLAN.md Appendix E, r14): exit code 130 was added for Ctrl-C, alongside codes 0–4.
 - Revisit when: a GUI or library API is added (v2).

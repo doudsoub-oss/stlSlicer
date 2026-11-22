@@ -36,8 +36,8 @@ These combinations are refused with exit code 1, before anything is read or writ
 
 The dry run prints its plan on standard output, and the log (including diagnostics) on standard
 error, so `-q` hides the log but not the plan, and `stlsplit model.stl --dry-run > plan.txt`
-saves the plan alone. The plan grows as features land. Today it has the orientation and the
-grid:
+saves the plan alone. It gives the orientation and the grid, then every piece, cut face,
+connector, pin length and label:
 
 ```text
 rotation: 90 deg about Y; cutting (X, Y, Z) = input (+Z, +Y, -X)
@@ -48,6 +48,9 @@ cells: 1 x 1 x 2 = 2
 planes X: none
 planes Y: none
 planes Z: 230
+pieces: 2
+piece X0-Y0-Z0: volume 2300000 mm^3
+...
 ```
 
 ## Precedence

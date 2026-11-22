@@ -36,6 +36,9 @@ ruff format .                               # format the code (Markdown is exclu
 python scripts/api_spike.py                 # after any dependency upgrade
 ```
 
+`scripts/check.py` fails under 85 % coverage, in both modes. The minimum is enforced there and
+not in the pytest configuration, so running a single test doesn't fail on coverage.
+
 ## Code style
 
 - ruff for linting and formatting (configuration in `pyproject.toml`), mypy in strict mode on
@@ -113,7 +116,20 @@ python scripts/api_spike.py                 # after any dependency upgrade
    CHANGELOG entry.
 
 ### Add a test fixture
-TODO (Phase 2)
+1. Add a function to `tests/conftest.py`. A valid solid returns a `Manifold`; a broken or
+   inside-out mesh returns a `trimesh.Trimesh` built with `process=False`, which keeps it as
+   constructed. Fixtures are generated in code: don't commit an STL for one.
+2. Add its row to PLAN.md Appendix D: its construction and what it is used for.
+3. Add a `case(...)` to `tests/e2e/cases.py`, with the arguments that make it reach its purpose
+   (usually a `--scale`, so that it is really cut, or a bed that puts a plane where it is
+   needed), its exit code and the diagnostics it must report. When no diagnostic shows that it
+   reached its purpose, add a `reaches` check on `assembly.json`. A mesh that needs repair also
+   gives its true `volume`. Every property in `tests/e2e/test_properties.py` then runs on it.
+4. Run it alone: `pytest --no-cov tests/e2e/test_properties.py -k your_case`.
+
+A **real model** goes in `tests/fixtures/real/` and must be CC0 or CC-BY, under 1 MB (about
+20,000 triangles), and credited in `tests/fixtures/README.md` with its source, licence and the
+changes made to it.
 
 ### Change an output file or the `assembly.json` schema
 1. A new top-level name in the output folder goes in `io.OWNED_OUTPUTS`, the only names the
@@ -144,4 +160,15 @@ TODO (Phase 2)
 4. Add it to [docs/adr/README.md](docs/adr/README.md).
 
 ### Release a version
-TODO (Phase 11)
+1. Start from `main` with CI green on every platform.
+2. Choose the number (SemVer, PLAN.md §8.6): MAJOR for a breaking CLI or output change, MINOR
+   for a feature, PATCH for a fix. A breaking change to `assembly.json` also increments
+   `schema_version`.
+3. Set `version` in `pyproject.toml`, then run `pip install -e .` so that `stlsplit --version`
+   and `assembly.json` report it.
+4. In `CHANGELOG.md`, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and add a new empty
+   `[Unreleased]` above it.
+5. Run `python scripts/check.py` and `python scripts/api_spike.py`.
+6. Commit as `[ADD] Release X.Y.Z` on a branch, and merge it once CI is green.
+7. Tag the merge commit on `main` and push the tag:
+   `git tag -a vX.Y.Z -m "stlsplit X.Y.Z" && git push origin vX.Y.Z`.

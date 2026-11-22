@@ -17,7 +17,7 @@ sit 0.05 mm inside: a quarter of a 0.2 mm clearance.
 ## Repair and shell normalization
 
 Turns the loaded mesh into one valid solid without damaging valid models or their voids
-(ADR-0007). Input: the mesh from `io.load_stl` (mm, input frame, vertices merged on load).
+(ADR-0015). Input: the mesh from `io.load_stl` (mm, input frame, vertices merged on load).
 Output: a `Manifold` with status `NoError` and a positive volume (I1), and a `RepairReport`
 whose `reference_volume` is the reference of every later volume check (I3).
 
@@ -139,8 +139,8 @@ quarter turn that keeps its Z up, then the other quarter turns, then the diagona
 **3. Cutting frame.** `x_cut = R · x_in + t`: rotate, then translate so that the bounding-box
 minimum is the origin. With a signed permutation, both steps are exact, and the minimum is
 exactly (0, 0, 0) (docs/LIBRARY_NOTES.md). `Orientation.input_to_cutting` is
-`[[R, t], [0, 0, 0, 1]]`, row by row. Phase 9 writes it to `assembly.json`, so any tool can map
-the parts back onto the original model.
+`[[R, t], [0, 0, 0, 1]]`, row by row. `assembly.json` records it, so any tool can map the parts
+back onto the original model.
 
 Code: `grid.orient`, `grid.choose_rotation`, `grid.to_cutting_frame`. Tests:
 `tests/unit/test_grid.py` (`test_auto_orient_*`, `test_every_candidate_rotation_is_a_proper_rotation`,
@@ -387,7 +387,7 @@ dowels; for pegs only the pos side, since the peg stands on the neg piece.
    leaves more outside than 1e-6 of the *longest* cylinder's volume, no L can pass. A binary
    search wouldn't be exact here, since the allowance grows with L.
 4. **Collisions**: each new hole (`geometry.hole_solid`: radius r_h, mouth chamfer ch_h,
-   depth h(L), the shape the tools will cut in Phase 7) must be at least w from every hole
+   depth h(L), the shape the tools cut) must be at least w from every hole
    already accepted in the same piece (`min_gap`, searching up to w + 1 mm), up to
    `LENGTH_TOLERANCE` (`min_gap` gives 1.999999999999993 for a gap of exactly 2). Otherwise
    the candidate is rejected (not shortened). This catches holes on perpendicular faces near a

@@ -99,6 +99,9 @@ All notable changes to this project are documented here. The format follows
 
 - `-v` also shows the time of the stage that failed, and the total time.
 - Ctrl-C stops a run with one line and exit code 130.
+- End-to-end suite: every catalogue fixture and three real scans run through the CLI, checking
+  watertight pieces, fit, volume balance, aligned holes, wall between holes, byte-identical
+  reruns and the exit code. `scripts/check.py` now fails under 85 % coverage.
 
 ### Changed
 - A model that would need more than 1000 grid cells, or a `--scale` that puts coordinates beyond

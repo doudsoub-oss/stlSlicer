@@ -4,9 +4,8 @@ Split an STL model that is too big for your printer into pieces that each fit th
 with dowel holes on every cut face, an ID engraved on each piece, the dowel pins to print, and an
 assembly map telling you which piece goes where.
 
-> **Status:** under development (Phase 10 of PLAN.md). A split writes every output: the pieces,
-> the dowels, the assembly map and a 3D preview. The final documentation and the v1.0 release
-> come in Phase 11. Sections marked TODO are filled in as they land.
+> **Status:** feature complete, not yet released. Version 1.0.0 waits for a real test print and
+> a handover to a second maintainer (PLAN.md, Phase 11b).
 
 ```bash
 stlsplit model.stl -o ./out --bed 220 220 250
@@ -162,8 +161,31 @@ each other in the model.
 
 ## Known limits
 
-TODO (Phase 11). By design: axis-aligned cuts only, no hollowing, no dovetails or snap-fits
-(PLAN.md §1.5).
+By design:
+
+- Cuts are axis-aligned planes on a grid. There are no curved or angled cuts, no hollowing, and
+  no dovetails or snap-fits.
+- stlsplit writes STL files. Slicing and G-code stay with your slicer.
+
+What to expect on some models:
+
+- **Thin walls get no connector.** A face needs about 10 mm of width for a 5 mm pin. Hollow
+  shells and thin plates are cut and written without holes, with W001 and exit code 3: glue them.
+- **Small blocks where three cuts meet** (about 15 mm wide) have no room for holes from three
+  sides, so some of their faces get no connector.
+- **A cut moved off a thin neck can still lack depth.** Plane nudging looks at the face, not at
+  the material behind it.
+- **Interlocked bodies** may have no straight assembly move. W013 says which step to try dry.
+
+Very large jobs:
+
+- A model needing more than 1000 grid cells is refused, and a 900-cell model takes about 15
+  minutes.
+- Memory grows with the area of the cut faces. A bed of several metres can run out (a 3 m cube
+  on a 1.8 m bed used 670 MB), and a native library can then crash instead of exiting with a
+  message.
+
+Ctrl-C in the first tenth of a second of startup can still print a Python traceback.
 
 ## Performance
 
@@ -189,7 +211,9 @@ With hundreds of pieces, connector placement dominates (84 % of the 2 m cube's t
 
 ## Real test print
 
-TODO (Phase 11).
+Not done yet. Before 1.0.0, a 2–4 piece model is printed and assembled with the generated dowels,
+and this section records the printer, the clearance chosen with the calibration kit and the
+result.
 
 ## Licence
 

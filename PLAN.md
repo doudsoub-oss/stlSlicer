@@ -1,7 +1,7 @@
 # PLAN.md — `stlsplit`: split oversized STL models into printable, connectable parts
 
 > Implementation plan and living specification, written for Claude Code and for the people who will
-> maintain the project afterwards. Revision **r14** (2026-11-21); r2 (2026-11-17) was rewritten
+> maintain the project afterwards. Revision **r15** (2026-11-22); r2 (2026-11-17) was rewritten
 > after a technical review. See Appendix E for what changed and why.
 >
 > **Claude Code:** at the start of each phase, read §0–§9 and that phase's section in §10. Don't read
@@ -74,7 +74,8 @@ what surprised you, what to watch.
 | 8 | Labels | done | `53624bc` | For Phase 9: `cli._run` now runs `labels.layout` after the placement and `tools.apply` engraves the labels, then stops with a "not implemented yet (Phase 9 onwards)" warning. `Applied.pieces` carry `Piece.label` (`text`, `face_id`, `outline`, `height`) for `assembly.json`; a piece can have none (W003, W008 or `--no-label`). Plan changes in Appendix E r11, all agreed with the maintainer: a label needs `labels.depth + min_wall` of material behind it (the literal spec made `tall_figure` exit 4); faces, then up to 256 positions per region part, are tried before W003; the anchor is centred on long faces (`u_shape` and a T-beam got false W003s); the guard's round corners are compensated; a run that draws text refuses a font that can't draw the labels (exit 1), while `--print-config` and `--no-label` don't read its content. `labels` imports `connectors`. Thin shells get W003 by design: a 2 mm hollow sphere has no label, since its wall is under the 2.6 mm backing. Checked after the review: 276 runs on 69 models (dowel, peg, none, depth 1.9) with no label-related exit 4. |
 | 9 | Assembly order, export, assembly map, preview | done | `e6cbbbe` | For Phase 10: `cli._run` is complete, with no stub left: the assembly order runs in a split and a dry run, then a split encodes every output before `io.prepare_output_dir` and writes them with `io.write_outputs`. Plan changes in Appendix E r12, agreed with the maintainer: plane-by-plane join rule (plain face order could need +X and -X in one step, `crossed_loop`), W013 and `AssemblyStep.clear_path`, exported pieces tested against the printable volume, plain-text troubleshooting references, `assembly` imports `geometry` and `errors`, `label_font` stored as a file name. The review found three gaps, fixed: the greedy order reported a false W013 (now a bounded search with backtracking, `hooked_strips`), a dry run exited 0 where the split exited 3 (both now check `tools.with_pegs`), and the docs overstated failure safety. Three older tests relied on the Phase 8 stub and now assert a real W006 or the exact folder listing. Open for Phase 10: a 10 mm cube with `--scale 0.001` exits 4 on I3 in the cutting stage (N3); an input name that isn't valid UTF-8 exits 1 because of `trimesh.load` (LIBRARY_NOTES). Checked: 207 CLI runs on 23 models (dowel, peg, none), no exit 4, schema failure, leaky STL or W013. |
 | 10 | Robustness and performance | done | `25bcef5`, `894a784` | For Phase 11: performance needed no optimization for the target: 1M triangles in 11 s and 2M in 20 s on a 4-core laptop (up to 27 s and 49 s while it was busy), with no real scan timed yet. The one slow path fixed was a face where no pin fits with many standard lengths (over 200 s to about 2 s). Plan changes in Appendix E r14: limits of 1000 cells and 5e9 mm, a piece too small to record exits 1, exit 130, the entry point is `stlsplit.__main__:run` (rerun `pip install -e .`). The review found that Ctrl-C during the swap of `25bcef5` could delete previous outputs, now fixed. Still open: connector candidates use memory in proportion to the face area, so a bed of several metres can run out (a 3 m cube on a 1.8 m bed took 670 MB) and a native library can then crash instead of exiting 1; a 900-cell model takes 15 minutes, 84 % of it in connector placement; Ctrl-C in the first 0.1 s of startup still shows Python's traceback. |
-| 11 | End-to-end suite, docs completion, v1.0 and handover | todo | | |
+| 11a | End-to-end suite, real fixtures, coverage gate, docs | in progress | | Split agreed with the maintainer (Appendix E, r15). The suite runs 58 cases (`tests/e2e/cases.py`) through the CLI, and `tests/e2e/test_property_checks.py` proves each property check can fail. The review found no product bug and four weaknesses in the new suite, all fixed (r15). A void under 0.01 % of a model is too small for the volume checks to see: `memnon`'s six voids are 0.002 %. |
+| 11b | Test print, handover, v1.0.0 | todo | | Needs people: a real 2–4 piece print (printer, clearance, result in the README) and someone other than the author following `docs/ONBOARDING.md` §9. Then `pyproject.toml` from 0.0.0 to 1.0.0, CHANGELOG 1.0.0 (remove the outdated "stop with a warning" entry and the README status banner), tag `v1.0.0` (CONTRIBUTING.md, "Release a version"). |
 
 ---
 
@@ -195,7 +196,7 @@ stlsplit/
 │   └── adr/
 │       ├── README.md            # ADR index
 │       ├── 0000-template.md
-│       └── 0001-...md … 0014-...md
+│       └── 0001-...md … 0015-...md
 ├── src/stlsplit/
 │   ├── __init__.py              # __version__ (read from package metadata)
 │   ├── __main__.py              # python -m stlsplit
@@ -1732,9 +1733,10 @@ hand over.
    `tests/fixtures/real/`, credited in `tests/fixtures/README.md`.
 2. End-to-end properties: run the CLI in a subprocess on every fixture and check all of these.
    1. Every piece is watertight.
-   2. Every piece fits U (peg-adjusted).
+   2. Every piece without a peg fits U (peg-adjusted), and every piece with a peg fits bed − 2·margin
+      (r15).
    3. The piece volumes + the volume removed by tools − the peg volumes = the reference volume, within
-      0.5 %.
+      0.01 % (r15).
    4. Holes line up across every cut face.
    5. No two holes in the same piece are closer than w.
    6. Two runs give byte-identical output.
@@ -1757,8 +1759,12 @@ hand over.
 8. Optional: a project skill `.claude/skills/stlsplit-change/SKILL.md` that walks Claude Code through
    CONTRIBUTING's definition of done and recipes. Skills load on demand, so `CLAUDE.md` stays short.
 
-**Done when.** The definition of done (§14) is met. Commit:
-`[FEAT] Phase 11: end-to-end suite, docs, v1.0.0`.
+**Split (r15).** Tasks 5 and 7 need people: a real print, and someone other than the author.
+- **11a:** tasks 1–4 and the written part of task 7. Commit:
+  `[FEAT] Phase 11a: end-to-end suite and docs`. Task 8 (optional) is left out.
+- **11b:** tasks 5, 6 and the handover itself. Commit: `[FEAT] Phase 11b: v1.0.0`.
+
+**Done when.** The definition of done (§14) is met.
 
 ---
 
@@ -1795,7 +1801,7 @@ Phase 0 turns each row into `docs/adr/NNNN-*.md` using Appendix A.
 | 0004 | Assembly in stages: X rows, then Y layers, then the Z stack (within a plane: r12). | Every join is one straight move along its pins; a move that can't be shown clear gets W013. |
 | 0005 | Dowels by default; pegs optional on any face, with U reduced by the protrusion. | Pins printed lying flat are the strongest; pegs either print vertically (weak) or need support. |
 | 0006 | Standard pin lengths, symmetric pins, explicit axial play; `--dowel-length` is the exact pin length. | One definition of length, and only a few pin files to print. |
-| 0007 | Try the mesh as-is first; sign-aware shell normalization; never `fix_normals(multibody=True)`. | Don't damage valid models; keep voids; fix overlapping shells. |
+| 0007 | Superseded by ADR-0015. Try the mesh as-is first; sign-aware shell normalization; never `fix_normals(multibody=True)`. | Don't damage valid models; keep voids; fix overlapping shells. |
 | 0008 | Auto-orient uses proper rotations only (det = +1). | A permutation matrix for an odd permutation silently mirrors the model. |
 | 0009 | Labels engraved on cut faces, bundled DejaVu Sans Bold, EvenOdd fill. | Hidden after assembly; same font everywhere; strokes thick enough to print. |
 | 0010 | Deterministic output. | Trivial regression tests and reproducible bug reports. |
@@ -1803,6 +1809,7 @@ Phase 0 turns each row into `docs/adr/NNNN-*.md` using Appendix A.
 | 0012 | Small pieces are merged only under the footprint guard. | Avoids slivers without breaking the assembly order. |
 | 0013 | The grid model is axis-aligned by design. | IDs, nudging and the assembly order depend on it. |
 | 0014 | Every hole is verified in 3D: rays, an exact containment check, and min_gap between holes. | The 2D inset alone misses pieces that narrow behind a face and holes that collide inside a piece. |
+| 0015 | Try the mesh as-is first; shell roles from containment and relative orientation (r5, r15). | By sign alone, a model inside out as a whole has its void turned into a solid. |
 
 ---
 
@@ -1925,7 +1932,8 @@ Copy this into the pull request description (or the final message of the session
 ## Appendix D — Test fixture catalogue
 
 Fixtures are functions in `tests/conftest.py` that return a `Manifold`, plus a helper that writes one
-to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are committed.
+to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are committed. The
+arguments and the exit code of each fixture in the end-to-end suite are in `tests/e2e/cases.py` (r15).
 
 | Fixture | Construction | Used for |
 |---|---|---|
@@ -1969,8 +1977,42 @@ to an STL file in `tmp_path`. Only the real models in `tests/fixtures/real/` are
 | `finned_block` | 300 × 60 × 60 block with a 0.05 mm fin across the cut | Very thin features (r14) |
 | `slit_block` | 400 × 100 × 100 block with thin internal slits behind its cut | No pin length fits: the search stays fast (r14) |
 | `refined_sphere_union(triangles)` | Eight overlapping spheres r = 100 on a 150 mm lattice | Performance at 1M and 2M triangles (r14) |
+| `box_with_bubble` | 300 × 100 × 100 box with a sphere r = 20 void away from its cut | Voids kept in a piece (r15) |
+| `knob_on_grid(blocked, rounded)` | `knob` plus a far 10 × 20 × 20 block, so that the even grid cuts it at x = 100 | Small-piece merge through the CLI, W004 and W005 (r15) |
 
 ## Appendix E — Plan revisions
+
+**r15 — 2026-11-22 (Phase 11).** Agreed with the maintainer in the Phase 11 plan:
+
+- **Phase 11 is split** into 11a and 11b: the test print and the handover need people, and §14 makes
+  them conditions for v1.0.0. The optional project skill (task 8) is left out.
+- **Fit property** (task 2.2): "every piece fits U" contradicted r10, since a full cell plus its peg
+  is valid and exceeds U (a 400 mm box in peg mode has a 210 mm piece on U = 200). A piece without
+  a peg fits U, and a piece with one fits bed − 2·margin.
+- **Volume property** (task 2.3): 0.01 % instead of 0.5 %. At 0.5 %, a 51 mm block could vanish from
+  a 300 mm cube unnoticed; the worst error measured over every case is 0.0001 %.
+- **ADR-0015** supersedes ADR-0007, which still described the sign-based normalization that r5
+  replaced. The code doesn't change.
+
+Found while building the suite:
+
+- The coverage minimum is in `scripts/check.py`, not the pytest configuration, where it would fail
+  every run of a single test.
+- Half of the catalogue fits the default bed and would never be cut, so each end-to-end case has its
+  own arguments (`tests/e2e/cases.py`).
+- `cylinder` was in the catalogue but not in `tests/conftest.py`, and `box_with_bubble` the reverse.
+- The real models are SMK scans dedicated CC0 by the museum (`tests/fixtures/README.md`).
+
+Found by the review, all in the new suite (no product bug):
+
+- A hole recorded outside its piece passed the line-up check, since an empty probe was all it
+  asked for. It now also requires material around each hole.
+- The volume balance takes its reference from the run's own log, so it can't see a repair that
+  fills a void. Each case now also compares that reference with a volume worked out without
+  stlsplit's repair.
+- Several fixtures were run without reaching their purpose (suffixes, the contact at a step, the
+  U-shaped face, connectors in both arms, the merge). Their cases now use a bed that does, and
+  check it from `assembly.json`. `knob_on_grid` makes W004 and W005 reachable through the CLI.
 
 **r14 — 2026-11-21 (Phase 10).** Agreed with the maintainer in the Phase 10 plan:
 

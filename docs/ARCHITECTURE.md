@@ -14,25 +14,25 @@ input.stl → io.load_stl → repair.prepare → grid.orient → grid.even_grid 
 
 ## Module map
 
-`✓` = exists now. A module only imports modules listed above it (no import cycles). Only
-`io` and `cli` touch the file system; everything else is pure.
+A module only imports modules listed above it (no import cycles). Only `io` and `cli` touch the
+file system; everything else is pure.
 
-| Module | Responsibility | May import | Status |
-|---|---|---|---|
-| `models` | Dataclasses only | — | ✓ (`Axis`, `Diagnostic`, `Orientation`, `Plane`, `Grid`, `Piece`, `CutFace`, `Connector`; the others come with their phase) |
-| `errors` | Exit codes, exception types, diagnostic registry | `models` | ✓ |
-| `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` | ✓ |
-| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders and holes | `config`, `models` | ✓ |
-| `repair` | Try-first repair, shell normalization | `geometry` | ✓ |
-| `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) | ✓ |
-| `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` (for `safe_region`) | ✓ |
-| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` | ✓ |
-| `labels` | Text outlines and layout on a face | `geometry`, `connectors` (for `hole_solids`) | ✓ |
-| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) | ✓ |
-| `calibrate` | Calibration kit | `tools`, `labels` | ✓ |
-| `assembly` | Assembly order; JSON and Markdown; preview layout | `models`, `config`, `errors`, `geometry` (r12) | ✓ |
-| `io` | Reading and writing files; output-directory policy | `errors`, `models`, `config` | ✓ (STL loading, output-directory policy, label-font lookup, encoding every output, publishing them all or nothing) |
-| `cli` | Argument parsing, orchestration, logging, exit codes | everything | ✓ |
+| Module | Responsibility | May import |
+|---|---|---|
+| `models` | Dataclasses only | — |
+| `errors` | Exit codes, exception types, diagnostic registry | `models` |
+| `config` | `Config` dataclasses, defaults, TOML, validation, `derived()` | `errors` |
+| `geometry` | Thin wrappers around library calls; mesh repair; frames; sections, regions, shadows, prisms, bodies; rays; cylinders and holes | `config`, `models` |
+| `repair` | Try-first repair, shell normalization | `geometry` |
+| `connectors` | Connector placement: safe regions, candidates, trial order, 3D checks | `geometry` (and `config`, `errors`, `models`) |
+| `grid` | Auto-orient, cutting frame, even grid, nudging (U itself comes from `config.derived`) | `geometry`, `connectors` (for `safe_region`) |
+| `cutting` | Splitting, piece IDs, cut faces, small-piece merge | `geometry`, `grid` |
+| `labels` | Text outlines and layout on a face | `geometry`, `connectors` (for `hole_solids`) |
+| `tools` | Hole, peg, pin and label solids; batched booleans | `geometry`, `connectors` (for `hole_solids`), `grid` (for `fits`) |
+| `calibrate` | Calibration kit | `tools`, `labels` |
+| `assembly` | Assembly order; JSON and Markdown; preview layout | `models`, `config`, `errors`, `geometry` (r12) |
+| `io` | STL loading, output-directory policy, label-font lookup, encoding every output, publishing them all or nothing | `errors`, `models`, `config` |
+| `cli` | Argument parsing, orchestration, logging, exit codes | everything |
 
 `__init__` exposes `__version__` (from the package metadata) and `__main__` runs `cli.main`.
 
@@ -65,7 +65,7 @@ INPUT ──io.load_stl──▶ trimesh mesh (input frame, ×scale)  + W006
           │              non-finite triangles dropped; no triangle → InputError (exit 1)
           ▼
 repair.prepare ──▶ Manifold (input frame) + RepairReport
-   1. geometry.to_manifold(mesh): NoError? → skip repair entirely      (ADR-0007)
+   1. geometry.to_manifold(mesh): NoError? → skip repair entirely      (ADR-0015)
    2. geometry.basic_repair (trimesh)                                   → W007
    3. geometry.deep_repair (pymeshlab, only with --deep-repair)        → W007
       still invalid → RepairError (exit 2): open / non-manifold edges, bodies, hint
@@ -94,7 +94,7 @@ repair.prepare ──▶ Manifold (input frame) + RepairReport
 
 ## Data model
 
-Dataclasses of PLAN.md §5.2, added by the phase that first uses them.
+Dataclasses of PLAN.md §5.2.
 
 | Dataclass | Module | Since | Purpose |
 |---|---|---|---|
