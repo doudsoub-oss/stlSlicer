@@ -11,7 +11,9 @@ Verified on 2026-11-18, Linux x86_64, CPython 3.13.18 (all 22 checks pass then; 
 five checks and the optional pymeshlab one, all 27 passing on 2026-11-19; Phase 4 added
 `manifold.coplanar_cuts`, `manifold.union_of_split_halves` and `manifold.decompose_void_shells`,
 all 31 passing on 2026-11-19; Phase 5 added `manifold.revolve_hole`, all 32 passing on
-2026-11-19; Phase 7 added `manifold.face_float_noise`, all 33 passing on 2026-11-21). The `>=`
+2026-11-19; Phase 7 added `manifold.face_float_noise`, all 33 passing on 2026-11-21; Phase 8 added
+`manifold.offset_round_flats` and `matplotlib.font_glyph_indices`, and all 35 pass on 2026-11-22,
+with the versions below). The `>=`
 minimums in
 `pyproject.toml` are these versions (numpy 2.5.5; the plan's own run on 2026-11-17 used 2.5.3 and
 found the same behaviours).
@@ -33,8 +35,7 @@ specifically; later 3.14 releases are fine.
 
 ## Behaviours
 
-"Used by" names the code that relies on the behaviour; entries marked *(planned)* name the phase
-whose code will.
+"Used by" names the code that relies on the behaviour.
 
 ### manifold3d
 
@@ -61,6 +62,7 @@ whose code will.
 | `decompose()` of a solid with a void returns the void as a **separate inside-out shell** (negative volume), and `Manifold.compose` of an outer shell and an inside-out shell drops the void. Reversing the void's triangles through `to_mesh64()` and `Mesh64` (float64 vertices, `uint64` indices) gives the solid of the void exactly, and the outer shell minus it is the original. | 3.5.5 | `geometry.bodies`, `geometry.reverse_winding` | `manifold.decompose_void_shells` |
 | Validity is checked **by index only**: overlapping closed shells are `NoError` with their volumes summed (two 10 mm cubes overlapping by half: 2000 mm³), and an inside-out closed cube is `NoError` with volume −1000 as one shell. `decompose()` of a hollow sphere gives one positive and one negative shell. Reversing the triangles of `to_mesh()` (copied) gives the opposite signed volume; `geometry.reverse_winding` does it in float64 (`to_mesh64()`, `Mesh64`; row above). | 3.5.5 | `repair.normalize_shells`, `geometry.reverse_winding` (ADR-0007) | `manifold.signed_shells` |
 | Two cubes sharing only an edge (vertices merged as on load) are **accepted as is**: `NoError`, two shells, 2000 mm³. The four half-edges of the shared edge pair up, so this is not a repair case (PLAN.md Appendix E, r5). | 3.5.5 | `repair.prepare` (no repair for it) | `manifold.edge_touching_cubes` |
+| `CrossSection.offset` with round joins draws corners as polygons with their **vertices** at delta, so their flats fall short (29 % at 0.5 mm with the default segments). Passing `circular_segments = n` and delta / cos(π/n) puts the flats at delta. | 3.5.5 | `geometry.grow`, `labels._unbacked` | `manifold.offset_round_flats` |
 | The stub file `manifold3d.pyi` ships without `py.typed`, so mypy ignores it: manifold3d is in the `ignore_missing_imports` list in `pyproject.toml`. | 3.5.5 | type checking | — (mypy run) |
 
 ### trimesh
@@ -77,7 +79,6 @@ whose code will.
 | Binary STL export starts with an 80-byte zero header (no timestamp: determinism). | 5.2.1 | `io.encode_stl`; ADR-0010 | `trimesh.stl_zero_header` |
 | `Scene.export(file_type="glb")` works when numpy, scipy and networkx are the only importable third-party packages (checked in a child process where every other installed package looks uninstalled). | 5.2.1 | `io.encode_preview` | `trimesh.glb_export` |
 | `load` of a path that isn't valid UTF-8 (a Latin-1 name on Linux) raises `UnicodeEncodeError`: the file name becomes a scene node, which is hashed as UTF-8. Loading from an open file works, so `io.load_stl` opens the file itself (r14). | 5.2.1 | `io.load_stl` | `tests/unit/test_io.py`, `tests/e2e/test_robustness.py` |
-| `CrossSection.offset` with round joins draws corners as polygons with their **vertices** at delta, so their flats fall short (29 % at 0.5 mm with the default segments). Passing `circular_segments = n` and delta / cos(π/n) puts the flats at delta. | 3.5.5 | `geometry.grow`, `labels._unbacked` | `manifold.offset_round_flats` |
 
 ### shapely
 

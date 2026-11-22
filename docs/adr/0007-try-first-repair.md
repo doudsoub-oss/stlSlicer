@@ -1,6 +1,6 @@
 # ADR-0007: Try the mesh as-is first; sign-aware shell normalization; never `fix_normals(multibody=True)`
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0015
 - **Date:** 2026-11-17
 - **Deciders:** gSbr
 - **Related:** PLAN.md §5.1, §13; spike check `trimesh.fix_normals_multibody`

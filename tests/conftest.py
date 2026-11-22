@@ -187,6 +187,11 @@ def dense_sphere() -> Manifold:
     return Manifold.sphere(20.0, 256)
 
 
+def cylinder() -> Manifold:
+    """A cylinder along Z, r = 60 and 300 mm tall: the default bed cuts it across, a round face."""
+    return Manifold.cylinder(300.0, 60.0, circular_segments=SPHERE_SEGMENTS)
+
+
 TORUS_MAJOR_RADIUS = 60.0
 TORUS_MINOR_RADIUS = 15.0
 
@@ -372,6 +377,16 @@ def knob(blocked: bool = False, rounded: bool = False) -> Manifold:
     if blocked:
         body = Manifold.compose([body, Manifold.cube((10.0, 20.0, 20.0)).translate((110, 40, 40))])
     return body
+
+
+def knob_on_grid(blocked: bool = False, rounded: bool = False) -> Manifold:
+    """``knob`` plus a far 10 × 20 × 20 block, so that the CLI's even grid cuts it at x = 100.
+
+    The block makes the model 200 mm long. On a 120 × 120 × 220 bed, without auto-orient and with
+    ``nudge_window = 0``, the planes are then ``KNOB_PLANES``: the merge is reachable end to end.
+    """
+    far = Manifold.cube((10.0, 20.0, 20.0)).translate((190.0, 150.0, 40.0))
+    return Manifold.compose([knob(blocked, rounded), far])
 
 
 def box_with_bubble() -> Manifold:

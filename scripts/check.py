@@ -15,6 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+COVERAGE_MINIMUM = 85
+"""Percent (PLAN.md §9.4). Enforced here, not in the pytest configuration, where it would fail
+every run of a single test."""
+
 
 def commands(fast: bool) -> list[list[str]]:
     marker = "not slow and not e2e" if fast else "not slow"
@@ -23,7 +27,7 @@ def commands(fast: bool) -> list[list[str]]:
         [python, "-m", "ruff", "check", "."],
         [python, "-m", "ruff", "format", "--check", "."],
         [python, "-m", "mypy", "src"],
-        [python, "-m", "pytest", "-m", marker],
+        [python, "-m", "pytest", "-m", marker, f"--cov-fail-under={COVERAGE_MINIMUM}"],
     ]
 
 
